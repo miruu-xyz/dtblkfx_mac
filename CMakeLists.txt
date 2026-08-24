@@ -1,171 +1,190 @@
-# DtBlkFx
-cmake_minimum_required(VERSION 3.19)
+# DtBlkFx — macOS universal build (arm64 + x86_64)
+#
+# Reworked for a local Homebrew/CLT toolchain:
+#   * no vcpkg  — FFTW3f is vendored as a universal static lib in third_party/
+#   * universal — one build produces both slices, for Live under Rosetta and native
+#   * side-by-side — distinct product name & plugin code so it cannot collide with
+#     the DtBlkFx_GUI.vst3 beta build
+#
+# See BUILDING.md for the local quirks, CLAUDE.md for the rules of the road.
+cmake_minimum_required(VERSION 3.22)
 
-#Set the Vcpkg package manager as toolchain.
-#The user is still able to set their own path or leave out vcpkg if desired.
-set(CMAKE_TOOLCHAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/modules/vcpkg/scripts/buildsystems/vcpkg.cmake CACHE STRING "Vcpkg cmake toolchain file")
+# ── Architecture / SDK ────────────────────────────────────────────────────────
+# Must be set before project(). Both slices in one build, lipo'd by the linker.
+set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Target architectures")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS version")
 
-# The top-level CMakeLists.txt file for a project must contain a literal, direct call to the
-# `project()` command. `project()` sets up some helpful variables that describe source/binary
-# directories, and the current project version. This is a standard CMake command.
+# SDK choice is forced by JUCE 6.0.7, not by taste. It calls
+# CGWindowListCreateImage, which the macOS 15 SDK marks *obsoleted* (a hard
+# error, not a warning), and the Command Line Tools here default to the 26.2
+# SDK. 12.1 is the newest installed SDK JUCE 6 still compiles against.
+# Revisit when we move to JUCE 7+; override with -DCMAKE_OSX_SYSROOT=...
+if(NOT DEFINED CMAKE_OSX_SYSROOT)
+  set(_clt_sdks "/Library/Developer/CommandLineTools/SDKs")
+  foreach(_sdk MacOSX12.1.sdk MacOSX12.sdk)
+    if(EXISTS "${_clt_sdks}/${_sdk}/usr/include/c++/v1/cstdio")
+      set(CMAKE_OSX_SYSROOT "${_clt_sdks}/${_sdk}" CACHE PATH "macOS SDK")
+      break()
+    endif()
+  endforeach()
+endif()
+if(NOT CMAKE_OSX_SYSROOT)
+  message(FATAL_ERROR
+    "No JUCE 6-compatible macOS SDK found under /Library/Developer/CommandLineTools/SDKs.\n"
+    "Pass one explicitly with -DCMAKE_OSX_SYSROOT=/path/to/MacOSXNN.sdk")
+endif()
+
+# ── Broken Command Line Tools libc++ workaround ───────────────────────────────
+# /Library/Developer/CommandLineTools/usr/include/c++/v1 on this machine holds
+# three stale files from an old install, and clang searches it *before* the
+# SDK's real libc++ — so every C++ compile dies with "'cstdio' file not found".
+# Point explicitly at the SDK's libc++. Harmless once the CLT is reinstalled.
+#
+# This has to happen before project(): the *_INIT variables are what seed the
+# flags used by try_compile(), and JUCE probes the compiler during configure.
+set(_sdk_cxx "${CMAKE_OSX_SYSROOT}/usr/include/c++/v1")
+if(EXISTS "${_sdk_cxx}/cstdio")
+  set(CMAKE_CXX_FLAGS_INIT    "-isystem${_sdk_cxx}")
+  set(CMAKE_OBJCXX_FLAGS_INIT "-isystem${_sdk_cxx}")
+  # JUCE builds its `juceaide` helper by shelling out to a *separate* cmake
+  # invocation, which inherits none of the above. The environment is the only
+  # channel that reaches it.
+  set(ENV{SDKROOT} "${CMAKE_OSX_SYSROOT}")
+  set(ENV{CXXFLAGS} "-isystem${_sdk_cxx}")
+  set(ENV{OBJCXXFLAGS} "-isystem${_sdk_cxx}")
+endif()
+
 project(DTBLKFX VERSION 2.0.0)
 
-# If you've installed JUCE somehow (via a package manager, or directly using the CMake install
-# target), you'll need to tell this project that it depends on the installed copy of JUCE. If you've
-# included JUCE directly in your source tree (perhaps as a submodule), you'll need to tell CMake to
-# include that subdirectory as part of the build.
+option(DTBLKFX_BUILD_TOOLS "Build the offline render/regression harness" ON)
 
-# find_package(JUCE CONFIG REQUIRED)        # If you've installed JUCE to your system
-# or
+if(DEFINED CMAKE_CXX_FLAGS_INIT AND NOT CMAKE_CXX_FLAGS_INIT STREQUAL "")
+  message(STATUS "Using SDK libc++ headers: ${_sdk_cxx}")
+endif()
+
 add_subdirectory(modules/juce)
 
+# ── FFTW (single precision, universal, static) ────────────────────────────────
+set(FFTW_UNIVERSAL "${CMAKE_CURRENT_SOURCE_DIR}/third_party/fftw-universal"
+    CACHE PATH "Prefix holding a universal libfftw3f.a and fftw3.h")
 
-# Copy on build for development purposes
-# set_directory_properties(PROPERTIES
-#     JUCE_COPY_PLUGIN_AFTER_BUILD TRUE
-#     JUCE_VST3_COPY_DIR "C:/Program Files/Common Files/VST3"
-# )
+if(NOT EXISTS "${FFTW_UNIVERSAL}/lib/libfftw3f.a")
+  message(FATAL_ERROR
+    "Universal libfftw3f.a not found at ${FFTW_UNIVERSAL}/lib.\n"
+    "Build it with tools/build_fftw_universal.sh, or point -DFFTW_UNIVERSAL= at a prefix.")
+endif()
 
-# If you are building a VST2 or AAX plugin, CMake needs to be told where to find these SDKs on your
-# system. This setup should be done before calling `juce_add_plugin`.
+add_library(fftw3f_universal STATIC IMPORTED GLOBAL)
+set_target_properties(fftw3f_universal PROPERTIES
+  IMPORTED_LOCATION "${FFTW_UNIVERSAL}/lib/libfftw3f.a"
+  INTERFACE_INCLUDE_DIRECTORIES "${FFTW_UNIVERSAL}/include")
 
-# juce_set_vst2_sdk_path(...)
-# juce_set_aax_sdk_path(...)
-
-# `juce_add_plugin` adds a static library target with the name passed as the first argument
-# (AudioPluginExample here). This target is a normal CMake target, but has a lot of extra properties set
-# up by default. As well as this shared code static library, this function adds targets for each of
-# the formats specified by the FORMATS arguments. This function accepts many optional arguments.
-# Check the readme at `docs/CMake API.md` in the JUCE repo for the full list.
-
-juce_add_plugin(DtBlkFx
-    PRODUCT_NAME "DtBlkFx_GUI"                      # The name of the final executable, which can differ from the target name
-    # VERSION ...                               # Set this if the plugin version is different to the project version
-    COMPANY_NAME "haiori"
-    # COMPANY_WEBSITE
-    # COMPANY_EMAIL
-    # COMPANY_COPYRIGHT
-    # PLUGIN_NAME                               # What is displayed in DAW
-    # VST3_CATEGORIES
-    PLUGIN_MANUFACTURER_CODE DtBl               # A four-character manufacturer id with at least one upper-case character
-    PLUGIN_CODE DtB2                            # A unique four-character plugin id with at least one upper-case character
-    FORMATS VST3                                # The formats to build. Valid values are: Standalone Unity VST3 AU AUv3 AAX VST
-    # ICON_BIG ...                              # ICON_* arguments specify a path to an image file to use as an icon for the Standalone
-    # ICON_SMALL ...
-    IS_SYNTH FALSE                              # Is this a synth or an effect?
-    NEEDS_MIDI_INPUT FALSE                      # Does the plugin need midi input?
-    NEEDS_MIDI_OUTPUT FALSE                     # Does the plugin need midi output?
-    IS_MIDI_EFFECT FALSE                        # Is this plugin a MIDI effect?
-    # EDITOR_WANTS_KEYBOARD_FOCUS TRUE/FALSE    # Does the editor need keyboard focus?
-    # EDITOR_WANTS_KEYBOARD_FOCUS TRUE/FALSE    # Does the editor need keyboard focus?
-)
-
-juce_add_binary_data(DtBlkFxAssets
-    SOURCES
-        dtblkfx_src/dtblkfx_logo.png
-)
-
-# `juce_generate_juce_header` will create a JuceHeader.h for a given target, which will be generated
-# into your build tree. This should be included with `#include <JuceHeader.h>`. The include path for
-# this header will be automatically added to the target. The main function of the JuceHeader is to
-# include all your JUCE module headers; if you're happy to include module headers directly, you
-# probably don't need to call this.
-
-# juce_generate_juce_header(AudioPluginExample)
-
-find_package(FFTW3 CONFIG REQUIRED)
-find_package(FFTW3f CONFIG REQUIRED)
-
-# `target_sources` adds source files to a target. We pass the target that needs the sources as the
-# first argument, then a visibility parameter for the sources (PRIVATE is normally best practice,
-# although it doesn't really affect executable targets). Finally, we supply a list of source files
-# that will be built into the target. This is a standard CMake command.
-
-target_sources(DtBlkFx PRIVATE
-    src/DtBlkFxProcessor.cpp
-    src/DtBlkFxEditor.cpp
+# ── DSP core ──────────────────────────────────────────────────────────────────
+# Darrell Tam's 2003-2006 engine, patched for clang/arm64. Deliberately kept
+# free of JUCE so the offline harness below can drive it without a plugin host.
+add_library(dtblkfx_core STATIC
     src/core/DtBlkFx.cpp
     src/core/FxRun1_0.cpp
     src/core/FxState1_0.cpp
-    # src/core/GlobalCtrl.cpp
     src/core/GlobalData.cpp
-    # src/core/Spectrogram.cpp
     src/core/fftw_support.cpp
     src/core/rfftw_float.cpp
     src/core/fft_frac_shift.cpp
     src/core/misc_stuff.cpp
     src/core/NoteFreq.cpp
-    # src/core/PixelFreqBin.cpp
     src/core/sweep1_coeff.cpp
     src/core/sweep2_coeff.cpp
     src/core/sweep3_coeff.cpp
     src/core/sweep4_coeff.cpp
-    src/core/sweep5_coeff.cpp
-)
+    src/core/sweep5_coeff.cpp)
 
-target_include_directories(DtBlkFx PRIVATE src/core)
-add_definitions(-DSTEREO)
+# SYSTEM: the legacy headers are not warning-clean, and their noise would drown
+# out warnings in our own code. Warnings inside src/core are silenced below.
+target_include_directories(dtblkfx_core SYSTEM PUBLIC src/core)
 
-# `target_compile_definitions` adds some preprocessor definitions to our target. In a Projucer
-# project, these might be passed in the 'Preprocessor Definitions' field. JUCE modules also make use
-# of compile definitions to switch certain features on/off, so if there's a particular feature you
-# need that's not on by default, check the module header for the correct flag to set here. These
-# definitions will be visible both to your code, and also the JUCE module code, so for new
-# definitions, pick unique names that are unlikely to collide! This is a standard CMake command.
+# The engine is compiled for two channels; see BlkFxParam.h. STEREO also gates
+# the stereo-only effect types (Vocode, CrossMix, WarpMix, HarmMatch L/R).
+target_compile_definitions(dtblkfx_core PUBLIC STEREO=1)
 
-target_compile_definitions(DtBlkFx
-    PUBLIC
-    JUCE_DISPLAY_SPLASH_SCREEN=0
-    JUCE_REPORT_APP_USAGE=0
-    # JUCE_WEB_BROWSER and JUCE_USE_CURL would be on by default, but you might not need them.
-    JUCE_WEB_BROWSER=0  # If you remove this, add `NEEDS_WEB_BROWSER TRUE` to the `juce_add_plugin` call
-    JUCE_USE_CURL=0     # If you remove this, add `NEEDS_CURL TRUE` to the `juce_add_plugin` call
-    JUCE_VST3_CAN_REPLACE_VST2=0
-)
+target_link_libraries(dtblkfx_core PUBLIC fftw3f_universal)
+target_compile_features(dtblkfx_core PUBLIC cxx_std_17)
+
+# Not warning-clean and never will be. Silence it here only, so warnings in our
+# own src/*.cpp stay visible.
+target_compile_options(dtblkfx_core PRIVATE -w)
+
+# ── Plugin ────────────────────────────────────────────────────────────────────
+# PRODUCT_NAME and PLUGIN_CODE deliberately differ from the DtBlkFx_GUI beta so
+# both can be installed and A/B'd in the same Live session.
+juce_add_plugin(DtBlkFx
+    PRODUCT_NAME "DtBlkFx Dev"
+    COMPANY_NAME "haiori"
+    PLUGIN_MANUFACTURER_CODE DtBl
+    PLUGIN_CODE DtB3
+    # AU needs full Xcode (JUCE 6 builds its .rsrc with Rez). Command Line
+    # Tools alone can't, so AU is out until we move to JUCE 7+.
+    FORMATS VST3 Standalone
+    VST3_CATEGORIES Fx Filter
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    # Install is handled below instead, so that ad-hoc signing happens *before*
+    # the bundle lands in the plug-in folder.
+    COPY_PLUGIN_AFTER_BUILD FALSE)
+
+juce_add_binary_data(DtBlkFxAssets SOURCES dtblkfx_src/dtblkfx_logo.png)
+
+target_sources(DtBlkFx PRIVATE
+    src/DtBlkFxProcessor.cpp
+    src/DtBlkFxEditor.cpp)
 
 target_include_directories(DtBlkFx PRIVATE
     src
-    src/core
-)
+    ${CMAKE_BINARY_DIR}/juce_binarydata_DtBlkFxAssets/JuceLibraryCode)
 
-# If your target needs extra binary assets, you can add them here. The first argument is the name of
-# a new static library target that will include all the binary resources. There is an optional
-# `NAMESPACE` argument that can specify the namespace of the generated binary data class. Finally,
-# the SOURCES argument should be followed by a list of source files that should be built into the
-# static library. These source files can be of any kind (wav data, images, fonts, icons etc.).
-# Conversion to binary-data will happen when your target is built.
+target_compile_definitions(DtBlkFx PUBLIC
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    JUCE_REPORT_APP_USAGE=0
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0)
 
-# juce_add_binary_data(AudioPluginData SOURCES ...)
-
-# `target_link_libraries` links libraries and JUCE modules to other libraries or executables. Here,
-# we're linking our executable target to the `juce::juce_audio_utils` module. Inter-module
-# dependencies are resolved automatically, so `juce_core`, `juce_events` and so on will also be
-# linked automatically. If we'd generated a binary data target above, we would need to link to it
-# here too. This is a standard CMake command.
-
-target_link_libraries(DtBlkFx PRIVATE
-    # JUCE Modules
-    juce::juce_audio_utils
-    juce::juce_dsp
-
-    # Binary data
-    # AudioPluginData # If we'd created a binary data target, we'd link to it here
-
-    # Recommended flags
-    juce::juce_recommended_warning_flags
-    juce::juce_dsp
-    juce::juce_gui_basics
-    juce::juce_gui_extra
-    FFTW3::fftw3
-    FFTW3::fftw3f
-    juce::juce_recommended_config_flags
-    juce::juce_recommended_lto_flags
-)
-
-target_link_libraries(DtBlkFx PUBLIC DtBlkFxAssets)
-
-target_link_libraries(DtBlkFx_VST3 PRIVATE DtBlkFxAssets)
-
-target_include_directories(DtBlkFx PRIVATE ${CMAKE_BINARY_DIR}/juce_binarydata_DtBlkFxAssets/JuceLibraryCode)
+target_link_libraries(DtBlkFx
+    PUBLIC
+        DtBlkFxAssets
+    PRIVATE
+        dtblkfx_core
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_gui_basics
+        juce::juce_gui_extra
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags)
 
 target_compile_features(DtBlkFx PRIVATE cxx_std_17)
+
+# ── Ad-hoc sign, then install ─────────────────────────────────────────────────
+# The linker ad-hoc signs the Mach-O, but the *bundle* stays unsigned
+# ("Info.plist=not bound"), which hosts can reject. Sign the whole bundle, then
+# copy it into the user plug-in folder — never the system one, and never over
+# the DtBlkFx_GUI beta, which has a different product name.
+if(TARGET DtBlkFx_VST3)
+  set(_vst3_dir "$ENV{HOME}/Library/Audio/Plug-Ins/VST3")
+  add_custom_command(TARGET DtBlkFx_VST3 POST_BUILD
+    COMMAND codesign --force --sign - --timestamp=none
+            "$<TARGET_BUNDLE_DIR:DtBlkFx_VST3>"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_vst3_dir}"
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${_vst3_dir}/$<TARGET_BUNDLE_DIR_NAME:DtBlkFx_VST3>"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "$<TARGET_BUNDLE_DIR:DtBlkFx_VST3>"
+            "${_vst3_dir}/$<TARGET_BUNDLE_DIR_NAME:DtBlkFx_VST3>"
+    VERBATIM
+    COMMENT "Signing and installing DtBlkFx Dev.vst3")
+endif()
+
+# ── Offline render / regression harness ───────────────────────────────────────
+# See CLAUDE.md and docs/ROADMAP.md. Host-free, so it builds and runs fast.
+if(DTBLKFX_BUILD_TOOLS)
+  add_subdirectory(tools/render)
+endif()
