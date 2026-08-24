@@ -42,7 +42,7 @@ Building installs the plugin for you, to
 
 There is no Audio Unit build yet: JUCE 6 builds the AU's resource fork with
 `Rez`, which requires a full Xcode install rather than just the Command Line
-Tools. See `docs/ROADMAP.md`, Phase 9.
+Tools. See `docs/ROADMAP.md`, Phase 4.
 
 ## Building from Source
 

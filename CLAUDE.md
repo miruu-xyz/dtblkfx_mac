@@ -97,7 +97,7 @@ Things in this codebase that have already cost time, or are waiting to:
   512.
 - **The engine is compiled `AUDIO_CHANNELS = 2`** and always dereferences
   channel index 1, while `isBusesLayoutSupported` currently accepts a mono
-  layout. See Phase 6.
+  layout. See Phase 7.
 
 ## House rules
 

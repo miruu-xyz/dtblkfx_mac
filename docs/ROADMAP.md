@@ -22,7 +22,7 @@ plugin code differ from the `DtBlkFx_GUI` beta so both can be installed and
 A/B'd side by side.
 
 The output limiter defaults to **off**. It is a post-port addition, not part of
-the original plugin. See Phase 8.
+the original plugin. See Phase 9.
 
 ### Phase 2 — guardrails
 
@@ -76,7 +76,20 @@ process and reports any variation. The phase is done when the full sweep is
 reproducible with `--in-process`, at which point the per-process isolation
 becomes an optimisation rather than a requirement.
 
-### Phase 4 — parameter semantics and value display
+### Phase 4 — JUCE upgrade
+
+Moving off JUCE 6.0.7 unlocks, in one step: the AU build (no more `Rez`, so no
+full-Xcode requirement), building against a current macOS SDK, and modern
+parameter and bus APIs that Phases 5 and 7 both want. Pulled forward from the
+back of the roadmap because those two phases build on top of it — better to
+land the upgrade once than to build against the old APIs and redo the work.
+
+Worth considering at the same time: replacing FFTW with Accelerate/vDSP, which
+would remove the vendored universal static library and the build script that
+produces it. Only with the harness green before and after — this is precisely
+the kind of change that alters the audio invisibly.
+
+### Phase 5 — parameter semantics and value display
 
 **What is missing.** The original plugin displayed parameter values with real
 units and real meaning. Delay read `x.xx beats`. Frequencies read in Hz rounded
@@ -118,11 +131,11 @@ length), so the text is context-dependent and cannot be a pure function of the
 parameter value; and they are called from the message thread while the engine
 runs on the audio thread.
 
-This phase and Phase 5 are two halves of the same complaint and should probably
+This phase and Phase 6 are two halves of the same complaint and should probably
 be scoped together, but implemented in this order — the GUI cannot show what the
 parameter layer does not expose.
 
-### Phase 5 — GUI
+### Phase 6 — GUI
 
 **What is wanted.** The current interface is not liked: it looks wrong, and it
 is further from the original than it needs to be. Move it back toward the
@@ -142,9 +155,9 @@ behaviour and layout, including the mouse interactions on the spectrogram.
 The current JUCE editor is `src/DtBlkFxEditor.cpp/.h` with
 `RetroLookAndFeel.h` and `SpectrogramComponent.h`.
 
-Depends on Phase 4 for anything involving parameter text.
+Depends on Phase 5 for anything involving parameter text.
 
-### Phase 6 — true stereo sidechain
+### Phase 7 — true stereo sidechain
 
 **Not a bug fix.** Several effects (`Vocode`, `CrossMix`, `WarpMix`,
 `HarmMatchLR`, `HarmMatchRL`) collapse the two channels — the harness measures
@@ -170,14 +183,14 @@ layout, but the engine is compiled `AUDIO_CHANNELS = 2` and always dereferences
 channel index 1. That is an out-of-bounds read, and it should be closed as part
 of this phase.
 
-### Phase 7 — factory presets
+### Phase 8 — factory presets
 
 The original ships 43 presets in `resources/stereo_presets.txt`, one per line as
 `name:v1 v2 v3 …`, loaded by `VstProgram<N>`. The port currently declares
 `g_blk_fx_presets` empty in `src/core/GlobalData.cpp` and reports a single
 program. Port them into the JUCE program interface, or into a preset browser.
 
-### Phase 8 — limiter review
+### Phase 9 — limiter review
 
 The output limiter is a post-port addition, not part of the original DtBlkFx. It
 was suspected of causing intermittent silence; that has not recurred since the
@@ -188,14 +201,3 @@ matches the plugin people know.
 When it is looked at: decide whether it belongs in the plugin at all, and if it
 does, give it makeup-gain behaviour that is not surprising and a fingerprint
 case in the harness.
-
-### Phase 9 — JUCE upgrade
-
-Moving off JUCE 6.0.7 unlocks, in one step: the AU build (no more `Rez`, so no
-full-Xcode requirement), building against a current macOS SDK, and modern
-parameter and bus APIs that Phases 4 and 6 both want.
-
-Worth considering at the same time: replacing FFTW with Accelerate/vDSP, which
-would remove the vendored universal static library and the build script that
-produces it. Only with the harness green before and after — this is precisely
-the kind of change that alters the audio invisibly.

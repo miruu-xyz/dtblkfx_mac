@@ -132,7 +132,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DtBlkFxAudioProcessor::creat
       50.0f));
   // Default OFF. The limiter is a post-port addition, not part of the original
   // plugin, and it has not been reviewed or tuned yet — off is the behaviour
-  // that matches DtBlkFx as people know it. See docs/ROADMAP.md, Phase 8.
+  // that matches DtBlkFx as people know it. See docs/ROADMAP.md, Phase 9.
   layout.add(
       std::make_unique<juce::AudioParameterBool>(limiterEnabledId, "Limiter Enabled", false));
 

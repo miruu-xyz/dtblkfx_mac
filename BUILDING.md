@@ -75,4 +75,4 @@ the rules, and `docs/ROADMAP.md` for what it has already turned up.
   harness can link it without JUCE.
 - Output limiter defaults to **off** (`src/DtBlkFxProcessor.cpp`). It is a
   post-port addition rather than part of the original plugin, and has not been
-  reviewed — see `docs/ROADMAP.md`, Phase 8.
+  reviewed — see `docs/ROADMAP.md`, Phase 9.
