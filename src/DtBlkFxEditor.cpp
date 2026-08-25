@@ -742,26 +742,34 @@ void DtBlkFxEditor::savePreset()
                   .getChildFile("DtBlkFx_Presets")
                   .getNonexistentChildFile("Preset", ".xml");
 
-  juce::FileChooser fc("Save Preset", file, "*.xml");
-  if (fc.browseForFileToSave(true)) {
-    auto xml = audioProcessor.apvts.copyState().createXml();
-    xml->writeTo(fc.getResult());
-  }
+  fileChooser = std::make_unique<juce::FileChooser>("Save Preset", file, "*.xml");
+  fileChooser->launchAsync(
+      juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
+      [this](const juce::FileChooser& fc) {
+        auto result = fc.getResult();
+        if (result != juce::File{}) {
+          auto xml = audioProcessor.apvts.copyState().createXml();
+          xml->writeTo(result);
+        }
+      });
 }
 
 void DtBlkFxEditor::loadPreset()
 {
-  juce::FileChooser fc("Load Preset",
-                       juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-                           .getChildFile("DtBlkFx_Presets"),
-                       "*.xml");
+  fileChooser = std::make_unique<juce::FileChooser>(
+      "Load Preset",
+      juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+          .getChildFile("DtBlkFx_Presets"),
+      "*.xml");
 
-  if (fc.browseForFileToOpen()) {
-    auto xml = juce::XmlDocument::parse(fc.getResult());
-    if (xml) {
-      audioProcessor.apvts.replaceState(juce::ValueTree::fromXml(*xml));
+  fileChooser->launchAsync(juce::FileBrowserComponent::openMode, [this](const juce::FileChooser& fc) {
+    auto result = fc.getResult();
+    if (result != juce::File{}) {
+      auto xml = juce::XmlDocument::parse(result);
+      if (xml)
+        audioProcessor.apvts.replaceState(juce::ValueTree::fromXml(*xml));
     }
-  }
+  });
 }
 
 void DtBlkFxEditor::loadFactoryPreset(int index)

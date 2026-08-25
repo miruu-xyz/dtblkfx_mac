@@ -45,13 +45,16 @@ sudo mv /Library/Developer/CommandLineTools/usr/include/c++/v1 \
         /Library/Developer/CommandLineTools/usr/include/c++/v1.stale
 ```
 
-**SDK pinned to 12.1.** JUCE 6.0.7 calls `CGWindowListCreateImage`, which the
-macOS 15 SDK marks *obsoleted* — a hard error. The Command Line Tools default
-to the 26.2 SDK, so the build selects `MacOSX12.1.sdk`, the newest installed SDK
-JUCE 6 still compiles against. Deployment target is 10.13.
+**SDK pinned to 12.1.** JUCE calls `CGWindowListCreateImage`, which the macOS 15
+SDK marks *obsoleted* — a hard error, not a warning. That isn't rewritten to
+use ScreenCaptureKit until JUCE 8.0.2, so staying on JUCE 7 (see
+`docs/ROADMAP.md`, Phase 4) means staying on a pre-15 SDK regardless of the
+Command Line Tools defaulting to 26.2. `MacOSX12.1.sdk` is the newest one on
+this machine with full libc++ headers. Deployment target is 10.13.
 
-**No AU.** JUCE 6 builds the Audio Unit's `.rsrc` with `Rez`, which needs full
-Xcode. VST3 covers Ableton. Both constraints disappear on JUCE 7+.
+**No AU, on purpose, not by necessity.** JUCE 7.0.4+ dropped the `Rez` step for
+Audio Units, so Command Line Tools alone should now be enough to build one —
+but AU was deliberately left out of Phase 4's scope. VST3 covers Ableton.
 
 **FFTW is vendored, not vcpkg'd.** `tools/build_fftw_universal.sh` builds
 single-precision FFTW 3.3.10 for both arches and lipos them into

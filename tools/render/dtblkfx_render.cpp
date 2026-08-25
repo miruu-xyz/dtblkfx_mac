@@ -74,7 +74,15 @@ constexpr int kBaselineBlockSize = 512;
 int gBlockSize = kBaselineBlockSize;
 constexpr int kNumSamples = 65536; // power of two: analysed with one FFT
 constexpr double kTempo = 120.0;
-constexpr int kNumBands = 8;
+
+// Phase 4 metrics scope (see docs/ROADMAP.md): band energies are now per
+// segment instead of over the whole render, at roughly 1/3-octave instead of
+// 1.25-octave width. 8 segments of 8192 samples lines up exactly with the
+// input signal's impulse period, so each segment also localises one
+// transient.
+constexpr int kNumSegments = 8;
+constexpr int kSegmentLen = kNumSamples / kNumSegments;
+constexpr int kNumBands = 24;
 
 // ── Deterministic test signal ────────────────────────────────────────────────
 // The two channels are deliberately *different*. A collapse to mono shows up in
@@ -203,13 +211,20 @@ std::vector<Case> buildCases()
 
 // ── Fingerprint ──────────────────────────────────────────────────────────────
 struct Fingerprint {
-  double peak[2] = {0, 0};      // dBFS
-  double rms[2] = {0, 0};       // dBFS
-  double correlation = 0;       // L/R Pearson correlation; ~1.0 means collapsed
-  int nonFinite = 0;            // NaN or Inf samples, must always be 0
-  double band[kNumBands] = {0}; // per-band energy, dB, left+right summed
-  uint64_t hash = 0;            // FNV-1a over the raw L/R sample bytes; see below
-  bool hasHash = false;         // false for baseline lines predating the hash column
+  double peak[2] = {0, 0}; // dBFS
+  double rms[2] = {0, 0};  // dBFS
+  double correlation = 0;  // L/R Pearson correlation; ~1.0 means collapsed
+  int nonFinite = 0;       // NaN or Inf samples, must always be 0
+  // Per-segment, per-band energy, dB, left+right summed. Segment-major,
+  // band-minor. See docs/ROADMAP.md, Phase 4.
+  double segBand[kNumSegments][kNumBands] = {{0}};
+  // Lag (samples) and normalized peak of the circular cross-correlation
+  // between the dry mono input and the wet mono output: a stand-in for phase
+  // that moves when the overlap-add alignment moves. See docs/ROADMAP.md.
+  int lagSamples = 0;
+  double lagCorr = 0;
+  uint64_t hash = 0;    // FNV-1a over the raw L/R sample bytes; see below
+  bool hasHash = false; // false for baseline lines predating the hash column
 };
 
 // FNV-1a over the raw output samples. This is bit-exact by construction, which
@@ -239,42 +254,120 @@ double toDb(double lin)
   return lin > 1e-12 ? 20.0 * std::log10(lin) : -240.0;
 }
 
-void analyseBands(const std::vector<float>& l, const std::vector<float>& r, double* bands)
+// Band energies over l[offset..offset+len), log-spaced 40 Hz..Nyquist. Used
+// once per segment, so a change localises to where in time it happened as
+// well as where in frequency.
+void computeBandEnergies(const float* l, const float* r, int offset, int len, double* bands)
 {
-  std::vector<double> mono((size_t)kNumSamples);
-  for (int i = 0; i < kNumSamples; ++i) {
-    const double a = std::isfinite(l[i]) ? l[i] : 0.0;
-    const double b = std::isfinite(r[i]) ? r[i] : 0.0;
-    // Hann window, so band edges do not smear from the block boundary
-    const double w = 0.5 - 0.5 * std::cos(2.0 * M_PI * (double)i / (double)kNumSamples);
-    mono[i] = (a + b) * 0.5 * w;
+  std::vector<float> in((size_t)len);
+  for (int i = 0; i < len; ++i) {
+    const double a = std::isfinite(l[offset + i]) ? l[offset + i] : 0.0;
+    const double b = std::isfinite(r[offset + i]) ? r[offset + i] : 0.0;
+    // Hann window, so band edges do not smear from the segment boundary
+    const double w = 0.5 - 0.5 * std::cos(2.0 * M_PI * (double)i / (double)len);
+    in[i] = (float)((a + b) * 0.5 * w);
   }
 
-  std::vector<float> in((size_t)kNumSamples);
-  for (int i = 0; i < kNumSamples; ++i)
-    in[i] = (float)mono[i];
-
-  const int nbins = kNumSamples / 2 + 1;
+  const int nbins = len / 2 + 1;
   fftwf_complex* out = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * (size_t)nbins);
-  fftwf_plan plan = fftwf_plan_dft_r2c_1d(kNumSamples, in.data(), out, FFTW_ESTIMATE);
+  fftwf_plan plan = fftwf_plan_dft_r2c_1d(len, in.data(), out, FFTW_ESTIMATE);
   fftwf_execute(plan);
 
-  // Eight bands, log-spaced from 40 Hz to Nyquist.
   const double lo = 40.0, hi = kSampleRate * 0.5;
   const double step = std::log(hi / lo) / (double)kNumBands;
   for (int b = 0; b < kNumBands; ++b) {
     const double fLo = lo * std::exp(step * b);
     const double fHi = lo * std::exp(step * (b + 1));
-    const int kLo = (int)(fLo * kNumSamples / kSampleRate);
-    const int kHi = std::min(nbins - 1, (int)(fHi * kNumSamples / kSampleRate));
+    const int kLo = (int)(fLo * len / kSampleRate);
+    const int kHi = std::min(nbins - 1, (int)(fHi * len / kSampleRate));
     double e = 0.0;
     for (int k = kLo; k <= kHi; ++k)
       e += (double)out[k][0] * out[k][0] + (double)out[k][1] * out[k][1];
-    bands[b] = toDb(std::sqrt(e) / (double)kNumSamples);
+    bands[b] = toDb(std::sqrt(e) / (double)len);
   }
 
   fftwf_destroy_plan(plan);
   fftwf_free(out);
+}
+
+void analyseSegBands(const std::vector<float>& l, const std::vector<float>& r,
+                      double segBand[kNumSegments][kNumBands])
+{
+  for (int s = 0; s < kNumSegments; ++s)
+    computeBandEnergies(l.data(), r.data(), s * kSegmentLen, kSegmentLen, segBand[s]);
+}
+
+// Circular cross-correlation (via FFT) between the dry mono input and the wet
+// mono output. The input signal is a fixed function of nothing (see
+// makeInput), so it is cheap to regenerate here rather than plumb it through
+// render(). Peak lag is a stand-in for phase/group delay: it moves if the
+// overlap-add windowing shifts, independent of level, which the band energies
+// cannot see (see docs/ROADMAP.md, Phase 4).
+void analyseLag(const std::vector<float>& l, const std::vector<float>& r, int& lagSamples,
+                 double& lagCorr)
+{
+  std::vector<float> dryL, dryR;
+  makeInput(dryL, dryR);
+
+  std::vector<float> dry((size_t)kNumSamples), wet((size_t)kNumSamples);
+  double sumSqDry = 0.0, sumSqWet = 0.0;
+  for (int i = 0; i < kNumSamples; ++i) {
+    dry[i] = (dryL[i] + dryR[i]) * 0.5f;
+    const float a = std::isfinite(l[i]) ? l[i] : 0.0f;
+    const float b = std::isfinite(r[i]) ? r[i] : 0.0f;
+    wet[i] = (a + b) * 0.5f;
+    sumSqDry += (double)dry[i] * dry[i];
+    sumSqWet += (double)wet[i] * wet[i];
+  }
+
+  const int nbins = kNumSamples / 2 + 1;
+  fftwf_complex* fftDry = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * (size_t)nbins);
+  fftwf_complex* fftWet = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * (size_t)nbins);
+  fftwf_plan pDry = fftwf_plan_dft_r2c_1d(kNumSamples, dry.data(), fftDry, FFTW_ESTIMATE);
+  fftwf_plan pWet = fftwf_plan_dft_r2c_1d(kNumSamples, wet.data(), fftWet, FFTW_ESTIMATE);
+  fftwf_execute(pDry);
+  fftwf_execute(pWet);
+
+  fftwf_complex* cross = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * (size_t)nbins);
+  for (int k = 0; k < nbins; ++k) {
+    // wet * conj(dry): peak at lag n means wet is dry delayed by n samples.
+    const double re = (double)fftWet[k][0] * fftDry[k][0] + (double)fftWet[k][1] * fftDry[k][1];
+    const double im = (double)fftWet[k][1] * fftDry[k][0] - (double)fftWet[k][0] * fftDry[k][1];
+    cross[k][0] = (float)re;
+    cross[k][1] = (float)im;
+  }
+
+  std::vector<float> corr((size_t)kNumSamples);
+  fftwf_plan pInv = fftwf_plan_dft_c2r_1d(kNumSamples, cross, corr.data(), FFTW_ESTIMATE);
+  fftwf_execute(pInv);
+
+  // FFTW's inverse is unnormalized (scales by N); fold that into the
+  // normalizer along with the two signal energies.
+  const double norm =
+      (double)kNumSamples * std::sqrt(std::max(sumSqDry, 1e-20) * std::max(sumSqWet, 1e-20));
+
+  // Search non-negative lags only -- the engine only ever adds latency, never
+  // looks ahead. Half the render covers the largest DELAY case (500 ms) with
+  // headroom.
+  int bestLag = 0;
+  double bestVal = -1.0;
+  const int maxLag = kNumSamples / 2;
+  for (int lag = 0; lag < maxLag; ++lag) {
+    const double v = std::fabs((double)corr[(size_t)lag] / norm);
+    if (v > bestVal) {
+      bestVal = v;
+      bestLag = lag;
+    }
+  }
+  lagSamples = bestLag;
+  lagCorr = bestVal;
+
+  fftwf_destroy_plan(pDry);
+  fftwf_destroy_plan(pWet);
+  fftwf_destroy_plan(pInv);
+  fftwf_free(fftDry);
+  fftwf_free(fftWet);
+  fftwf_free(cross);
 }
 
 Fingerprint analyse(const std::vector<float>& l, const std::vector<float>& r)
@@ -311,7 +404,8 @@ Fingerprint analyse(const std::vector<float>& l, const std::vector<float>& r)
   for (int c = 0; c < 2; ++c)
     fp.peak[c] = toDb(fp.peak[c]);
 
-  analyseBands(l, r, fp.band);
+  analyseSegBands(l, r, fp.segBand);
+  analyseLag(l, r, fp.lagSamples, fp.lagCorr);
   fp.hash = hashSamples(l, r);
   fp.hasHash = true;
   return fp;
@@ -431,19 +525,23 @@ void writeWav(const std::string& path, const std::vector<float>& l, const std::v
 // ── Fingerprint file I/O ─────────────────────────────────────────────────────
 std::string formatLine(const std::string& name, const Fingerprint& fp)
 {
-  char buf[512];
+  char buf[4096];
   int n = std::snprintf(buf,
                         sizeof buf,
-                        "%-28s peak %8.3f %8.3f  rms %8.3f %8.3f  corr %7.4f  nan %d  bands",
+                        "%-28s peak %8.3f %8.3f  rms %8.3f %8.3f  corr %7.4f  nan %d"
+                        "  lag %6d %7.4f  segbands",
                         name.c_str(),
                         fp.peak[0],
                         fp.peak[1],
                         fp.rms[0],
                         fp.rms[1],
                         fp.correlation,
-                        fp.nonFinite);
-  for (int b = 0; b < kNumBands; ++b)
-    n += std::snprintf(buf + n, sizeof buf - (size_t)n, " %8.3f", fp.band[b]);
+                        fp.nonFinite,
+                        fp.lagSamples,
+                        fp.lagCorr);
+  for (int s = 0; s < kNumSegments; ++s)
+    for (int b = 0; b < kNumBands; ++b)
+      n += std::snprintf(buf + n, sizeof buf - (size_t)n, " %8.3f", fp.segBand[s][b]);
   n += std::snprintf(
       buf + n, sizeof buf - (size_t)n, "  hash %016llx", (unsigned long long)fp.hash);
   return buf;
@@ -451,10 +549,11 @@ std::string formatLine(const std::string& name, const Fingerprint& fp)
 
 bool parseLine(const std::string& line, std::string& name, Fingerprint& fp)
 {
-  char nameBuf[128], w1[16], w2[16], w3[16], w4[16], w5[16];
+  char nameBuf[128], w1[16], w2[16], w3[16], w4[16], w5[16], w6[16];
   int consumed = 0;
   const int got = std::sscanf(line.c_str(),
-                              "%127s %15s %lf %lf %15s %lf %lf %15s %lf %15s %d %15s%n",
+                              "%127s %15s %lf %lf %15s %lf %lf %15s %lf %15s %d"
+                              " %15s %d %lf %15s%n",
                               nameBuf,
                               w1,
                               &fp.peak[0],
@@ -467,17 +566,22 @@ bool parseLine(const std::string& line, std::string& name, Fingerprint& fp)
                               w4,
                               &fp.nonFinite,
                               w5,
+                              &fp.lagSamples,
+                              &fp.lagCorr,
+                              w6,
                               &consumed);
-  if (got < 12)
+  if (got < 15)
     return false;
 
   const char* p = line.c_str() + consumed;
-  for (int b = 0; b < kNumBands; ++b) {
-    char* end = nullptr;
-    fp.band[b] = std::strtod(p, &end);
-    if (end == p)
-      return false;
-    p = end;
+  for (int s = 0; s < kNumSegments; ++s) {
+    for (int b = 0; b < kNumBands; ++b) {
+      char* end = nullptr;
+      fp.segBand[s][b] = std::strtod(p, &end);
+      if (end == p)
+        return false;
+      p = end;
+    }
   }
 
   // Optional trailing "hash <hex>", absent from baselines predating Phase 2.1.
@@ -513,15 +617,32 @@ bool compare(const Fingerprint& a, const Fingerprint& b, std::string& why)
   ok &= dbOk("peakR", a.peak[1], b.peak[1]);
   ok &= dbOk("rmsL", a.rms[0], b.rms[0]);
   ok &= dbOk("rmsR", a.rms[1], b.rms[1]);
-  for (int i = 0; i < kNumBands; ++i) {
-    char what[16];
-    std::snprintf(what, sizeof what, "band%d", i);
-    ok &= dbOk(what, a.band[i], b.band[i]);
+  for (int s = 0; s < kNumSegments; ++s) {
+    for (int i = 0; i < kNumBands; ++i) {
+      char what[24];
+      std::snprintf(what, sizeof what, "seg%d.band%d", s, i);
+      ok &= dbOk(what, a.segBand[s][i], b.segBand[s][i]);
+    }
   }
   if (std::fabs(a.correlation - b.correlation) > kTolCorr) {
     char buf[128];
     std::snprintf(
         buf, sizeof buf, "corr %.4f -> %.4f; ", a.correlation, b.correlation);
+    why += buf;
+    ok = false;
+  }
+  // Lag tolerance of 1 sample absorbs a near-tie argmax shifted by FFTW
+  // planner/cross-machine FP noise; a real alignment change moves it by a
+  // hop or more. See docs/ROADMAP.md, Phase 4.
+  if (std::abs(a.lagSamples - b.lagSamples) > 1 || std::fabs(a.lagCorr - b.lagCorr) > kTolCorr) {
+    char buf[128];
+    std::snprintf(buf,
+                  sizeof buf,
+                  "lag %d(%.4f) -> %d(%.4f); ",
+                  a.lagSamples,
+                  a.lagCorr,
+                  b.lagSamples,
+                  b.lagCorr);
     why += buf;
     ok = false;
   }
@@ -559,7 +680,7 @@ bool renderIsolated(const Case& c, Fingerprint& fp)
   if (!pipe)
     return false;
 
-  char line[1024];
+  char line[4096];
   const bool got = std::fgets(line, sizeof line, pipe) != nullptr;
   const int rc = pclose(pipe);
 
@@ -772,7 +893,9 @@ int main(int argc, char** argv)
     f << "# dtblkfx_render fingerprints. Regenerate with tools/regen_baseline.sh\n"
       << "# sr " << (int)kSampleRate << "  block " << gBlockSize << "  samples " << kNumSamples
       << "  tempo " << (int)kTempo << "\n"
-      << "# columns: name peak(L R) rms(L R) corr nan bands(0..7), all dB except corr\n";
+      << "# columns: name peak(L R) rms(L R) corr nan lag(samples corr) "
+      << "segbands(" << kNumSegments << " segments x " << kNumBands
+      << " bands, segment-major), all dB except corr/lagCorr\n";
     for (const auto& line : out)
       f << line << "\n";
     std::printf("wrote %zu fingerprints to %s\n", out.size(), arg.c_str());

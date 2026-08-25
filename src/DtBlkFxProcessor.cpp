@@ -288,8 +288,11 @@ void DtBlkFxAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     buffer.clear(i, 0, buffer.getNumSamples());
 
   if (core) {
-    core->processReplacing(
-        buffer.getArrayOfWritePointers(), buffer.getArrayOfWritePointers(), buffer.getNumSamples());
+    // getArrayOfWritePointers() returns float* const* as of JUCE 7 (the
+    // pointed-to samples are still mutable, only the array of pointers is
+    // const); processReplacing predates that and wants float**.
+    auto* writePointers = const_cast<float**>(buffer.getArrayOfWritePointers());
+    core->processReplacing(writePointers, writePointers, buffer.getNumSamples());
   }
 
   // Output Limiter

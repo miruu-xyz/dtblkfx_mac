@@ -80,59 +80,58 @@ behave as designed — untouched by this change, seeded only from the harness
 Dev.vst3` and tested in Live — sounds unchanged. That was the last item on
 the "done when" list.
 
+### Phase 4 — JUCE upgrade
+
+Moved JUCE 6.0.7 → 7.0.12. Chosen over JUCE 8 to keep the jump small (still
+C++17); the trade-off, discovered mid-phase, is that `CGWindowListCreateImage`
+— the API forcing the SDK pin — isn't rewritten to use ScreenCaptureKit until
+JUCE 8.0.2 (confirmed against upstream's git history), so the SDK pin stays,
+just for a different reason than "JUCE 6.0.7 specifically". AU was left off
+`FORMATS` on purpose: JUCE 7.0.4+ dropped the `Rez` step, so Command Line Tools
+alone should now be enough to build one, but turning it on is deferred to a
+later phase rather than bundled here.
+
+**Opening task, done first and on the old toolchain, per the plan.** The
+tolerant fingerprint before this phase reduced a whole 65536-sample render to
+eight log-spaced bands from one FFT — no time axis, phase discarded, wide
+enough (1.25 octaves/band) to hide window misalignment or transient smear.
+Replaced in `tools/render/dtblkfx_render.cpp` with:
+
+- **Time resolution.** Bands are now per segment, not over the whole render.
+  8 segments of 8192 samples each, matching the test signal's impulse period
+  exactly, so a change also localises to which transient it hit.
+- **More bands.** 8 → 24 (about a third of an octave each, down from 1.25).
+- **Phase.** A new metric: circular cross-correlation (FFT-based, `analyseLag`)
+  between the dry mono input and the wet mono output, reported as peak lag and
+  its normalized correlation. Moves if the overlap-add alignment shifts,
+  independent of level — which the band energies can't see. Searches
+  non-negative lags up to `kNumSamples/2` samples, enough headroom for the
+  500 ms `DELAY` case.
+
+Baseline regenerated on JUCE 6 *before* touching the submodule, so the new
+metrics are measured against a same-toolchain reference. `check_audio.sh`
+still runs in ~7s.
+
+**The upgrade itself** needed two source changes, both compile-time API
+removals rather than behaviour changes: `AudioBuffer::getArrayOfWritePointers`
+now returns `float* const*` (`DtBlkFxProcessor.cpp`, fixed with a
+`const_cast` — the samples were never actually const, only the pointer array);
+and `FileChooser::browseForFileToSave`/`browseForFileToOpen` are gone in
+favour of `launchAsync`, which needs the chooser kept alive past the
+call (`DtBlkFxEditor.h/.cpp` — now owns a `std::unique_ptr<juce::FileChooser>`
+member instead of a stack-local one).
+
+**Result:** `check_audio.sh` 71/71, and the render hash is bit-identical to
+the pre-upgrade baseline for every case — not just within tolerance, the exact
+same bytes — because `src/core/` isn't linked against JUCE at all and nothing
+in its compile flags changed. `--in-process --repeat 3` still reports zero
+`UNSTABLE`. Built and installed as `DtBlkFx Dev.vst3`, universal, ad-hoc
+signed, and tested in Live — sounds unchanged. That was the last item on the
+"done when" list.
+
 ---
 
 ## Planned
-
-### Phase 4 — JUCE upgrade
-
-Moving off JUCE 6.0.7 unlocks, in one step: the AU build (no more `Rez`, so no
-full-Xcode requirement), building against a current macOS SDK, and modern
-parameter and bus APIs that Phases 5 and 7 both want. Pulled forward from the
-back of the roadmap because those two phases build on top of it — better to
-land the upgrade once than to build against the old APIs and redo the work.
-
-**The harness cannot see most of this phase, and can be fooled by the rest.**
-Two separate problems, and the second one is work that has to happen first.
-
-*Not covered at all.* `dtblkfx_render` drives the core directly, with no JUCE in
-the process. Nothing in `src/DtBlkFxProcessor.*` is exercised, so the JUCE-side
-work — new parameter and bus APIs — gets no regression check from
-`check_audio.sh` whatsoever. A green harness says the core still behaves; it
-says nothing about the wrapper. That half is verified by loading the plugin in a
-host.
-
-*Covered, but weakly.* Rebuilding `src/core/` against a current SDK and a newer
-toolchain can change floating-point codegen, so the audio is allowed to differ
-in its last bits while sounding identical. The Phase 2.1 hash is advisory by
-design for exactly this reason, which leaves the tolerant fingerprint as the
-only evidence — and the tolerant fingerprint is thin. `analyseBands` reduces the
-whole 65536-sample render to eight log-spaced magnitude bands from a single FFT:
-phase discarded, no time axis. That is a good detector for what it was built to
-catch — a refactor that shifts levels, an effect that stops processing, a
-channel that collapses — and a poor one for window misalignment, an off-by-one
-in the hop or the bin reconstruction, pre-echo, or transient smear. Those
-redistribute energy in time, or across bins *within* a band, and can leave all
-eight band levels inside the 0.05 dB tolerance. The test signal already carries
-an impulse every 8192 samples for transient response, and the analysis throws
-that information away.
-
-**So scope the metrics first, as the opening task of the phase, and regenerate
-the baseline before the upgrade** — so the new toolchain is measured against a
-reference the current one produced:
-
-- **Time resolution.** Band energies per segment rather than for the whole
-  render. The signal is a sweep, so a per-segment breakdown doubles as a coarse
-  frequency check, and it localises a transient error to where it happened.
-- **Phase.** Something that moves when the overlap-add alignment moves —
-  cross-correlation lag against the dry input, or group delay in a few bands.
-  Per-bin phase is more baseline than it is worth.
-- **More bands.** Eight bands from 40 Hz to Nyquist is about an octave and a
-  quarter each, wide enough to hide a birdie or a shifted resonance.
-
-The same requirement applies to any later change of the same shape — vectorising
-the core, changing the float flags, another compiler or SDK move. Bits move,
-perception must not, and today's fingerprint cannot tell those two apart.
 
 ### Phase 5 — parameter semantics and value display
 
@@ -199,6 +198,14 @@ behaviour and layout, including the mouse interactions on the spectrogram.
 
 The current JUCE editor is `src/DtBlkFxEditor.cpp/.h` with
 `RetroLookAndFeel.h` and `SpectrogramComponent.h`.
+
+**Group FX types so the mask effects stop looking broken.** `HarmMask`,
+`AutoHarmMask`, `ASubH1Mask`, `ASubH2Mask`, `ASubH3Mask` and `ThreshMask`
+produce a mask/envelope rather than audible output on their own, so picking
+one in an otherwise plain FX slot sounds like nothing happened — not a bug,
+but indistinguishable from one without context. Group the FX type menu (or
+otherwise visually separate) so mask effects read as modifiers meant to be
+combined with something else, rather than effects in their own right.
 
 Depends on Phase 5 for anything involving parameter text.
 

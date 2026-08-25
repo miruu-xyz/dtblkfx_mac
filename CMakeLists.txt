@@ -14,14 +14,18 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Target architectures")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS version")
 
-# SDK choice is forced by JUCE 6.0.7, not by taste. It calls
-# CGWindowListCreateImage, which the macOS 15 SDK marks *obsoleted* (a hard
-# error, not a warning), and the Command Line Tools here default to the 26.2
-# SDK. 12.1 is the newest installed SDK JUCE 6 still compiles against.
-# Revisit when we move to JUCE 7+; override with -DCMAKE_OSX_SYSROOT=...
+# SDK choice is forced by JUCE, not by taste. It calls CGWindowListCreateImage,
+# which the macOS 15 SDK marks *obsoleted* (a hard error, not a warning), and
+# the Command Line Tools here default to the 26.2 SDK. That call isn't
+# rewritten to use ScreenCaptureKit until JUCE 8.0.2 (confirmed against
+# upstream's git history) -- staying on JUCE 7 (see docs/ROADMAP.md, Phase 4)
+# means staying on a pre-15 SDK regardless. 12.3 is tried first in case a
+# newer CLT install ships full headers for it, but on this machine its SDK
+# bundle is missing usr/include/c++/v1 entirely, so it falls through to 12.1.
+# Revisit when we move to JUCE 8+; override with -DCMAKE_OSX_SYSROOT=...
 if(NOT DEFINED CMAKE_OSX_SYSROOT)
   set(_clt_sdks "/Library/Developer/CommandLineTools/SDKs")
-  foreach(_sdk MacOSX12.1.sdk MacOSX12.sdk)
+  foreach(_sdk MacOSX12.3.sdk MacOSX12.1.sdk MacOSX12.sdk)
     if(EXISTS "${_clt_sdks}/${_sdk}/usr/include/c++/v1/cstdio")
       set(CMAKE_OSX_SYSROOT "${_clt_sdks}/${_sdk}" CACHE PATH "macOS SDK")
       break()
@@ -30,7 +34,7 @@ if(NOT DEFINED CMAKE_OSX_SYSROOT)
 endif()
 if(NOT CMAKE_OSX_SYSROOT)
   message(FATAL_ERROR
-    "No JUCE 6-compatible macOS SDK found under /Library/Developer/CommandLineTools/SDKs.\n"
+    "No JUCE 7-compatible macOS SDK found under /Library/Developer/CommandLineTools/SDKs.\n"
     "Pass one explicitly with -DCMAKE_OSX_SYSROOT=/path/to/MacOSXNN.sdk")
 endif()
 
@@ -121,8 +125,9 @@ juce_add_plugin(DtBlkFx
     COMPANY_NAME "haiori"
     PLUGIN_MANUFACTURER_CODE DtBl
     PLUGIN_CODE DtB3
-    # AU needs full Xcode (JUCE 6 builds its .rsrc with Rez). Command Line
-    # Tools alone can't, so AU is out until we move to JUCE 7+.
+    # JUCE 7.0.4+ no longer runs Rez for AU, so Command Line Tools alone
+    # should now be enough -- but adding AU is deliberately out of scope for
+    # Phase 4 (see docs/ROADMAP.md). Left as VST3 + Standalone only.
     FORMATS VST3 Standalone
     VST3_CATEGORIES Fx Filter
     IS_SYNTH FALSE
