@@ -84,11 +84,6 @@ parameter and bus APIs that Phases 5 and 7 both want. Pulled forward from the
 back of the roadmap because those two phases build on top of it — better to
 land the upgrade once than to build against the old APIs and redo the work.
 
-Worth considering at the same time: replacing FFTW with Accelerate/vDSP, which
-would remove the vendored universal static library and the build script that
-produces it. Only with the harness green before and after — this is precisely
-the kind of change that alters the audio invisibly.
-
 ### Phase 5 — parameter semantics and value display
 
 **What is missing.** The original plugin displayed parameter values with real
