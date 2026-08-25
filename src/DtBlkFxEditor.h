@@ -130,6 +130,10 @@ public:
 private:
   DtBlkFxAudioProcessor& audioProcessor;
 
+  // Owns the in-flight chooser so it survives past savePreset()/loadPreset()
+  // returning -- launchAsync's callback fires later, on the message thread.
+  std::unique_ptr<juce::FileChooser> fileChooser;
+
   HeaderComponent header;
   FooterComponent footer;
   LimiterComponent limiter;

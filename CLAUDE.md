@@ -44,7 +44,8 @@ or the build flags:**
 
 It renders a fixed signal through all 31 effect types plus the engine on its
 own, reduces each render to a fingerprint (peak, RMS, L/R correlation, NaN
-count, eight spectral bands), and diffs against `tests/baseline/core.fingerprint`.
+count, a cross-correlation lag against the dry input, and 24-band spectral
+energy per time segment), and diffs against `tests/baseline/core.fingerprint`.
 Exit 0 means the audio did not move.
 
 Rules for it:
