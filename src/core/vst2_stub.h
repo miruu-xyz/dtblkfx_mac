@@ -92,7 +92,15 @@ public:
   virtual VstTimeInfo* getTimeInfo(VstInt32 filter) { return &timeInfo; }
 
   float sampleRate = 44100.0f;
-  VstTimeInfo timeInfo;
+
+  // Value-initialised on purpose. This used to be an indeterminate POD, so
+  // DtBlkFx::pollUpdate read whatever was on the heap: a stray kVstTempoValid
+  // bit with a garbage tempo left _samps_per_beat at nonsense, which made a
+  // beats-mode delay clamp to its 100-sample minimum and display "inf beats".
+  // Zeroed, no valid flags are set, so the engine keeps its own default tempo
+  // until a host supplies a real one -- which
+  // DtBlkFxAudioProcessor::processBlock now does, every block.
+  VstTimeInfo timeInfo{};
   void* editor = nullptr;
 
   void setNumInputs(int n) {}

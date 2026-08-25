@@ -33,6 +33,10 @@ public:
   void prepareToPlay(double sampleRate, int samplesPerBlock) override;
   void releaseResources() override;
 
+  // Copy the host's tempo and transport position into the VST2 stub's
+  // VstTimeInfo, which is where the engine looks for them.
+  void updateTimeInfo();
+
   bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
 
   void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;

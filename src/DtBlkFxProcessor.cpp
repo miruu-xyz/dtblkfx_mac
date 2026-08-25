@@ -576,6 +576,43 @@ void DtBlkFxAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock
   limiter.reset();
 }
 
+void DtBlkFxAudioProcessor::updateTimeInfo()
+{
+  // The engine asks the "host" for tempo through the VST2 stub, which hands
+  // back one struct that nobody was ever filling in. Everything tempo-related
+  // -- delay in beats, block sync, the parameter interpolation window -- reads
+  // from here, so it all sat on whatever the default was.
+  auto& ti = core->timeInfo;
+  ti.sampleRate = getSampleRate();
+  ti.flags = 0;
+
+  auto* playHead = getPlayHead();
+  if (playHead == nullptr)
+    return;
+
+  const auto pos = playHead->getPosition();
+  if (!pos.hasValue())
+    return;
+
+  if (const auto bpm = pos->getBpm()) {
+    ti.tempo = *bpm;
+    ti.flags |= kVstTempoValid;
+  }
+  if (const auto ppq = pos->getPpqPosition()) {
+    ti.ppqPos = *ppq;
+    ti.flags |= kVstPpqPosValid;
+  }
+  if (const auto sig = pos->getTimeSignature()) {
+    ti.timeSigNumerator = sig->numerator;
+    ti.timeSigDenominator = sig->denominator;
+    ti.flags |= kVstTimeSigValid;
+  }
+  if (const auto samples = pos->getTimeInSamples())
+    ti.samplePos = (double)*samples;
+  if (pos->getIsPlaying())
+    ti.flags |= kVstTransportPlaying;
+}
+
 void DtBlkFxAudioProcessor::releaseResources()
 {
   if (core) {
@@ -626,6 +663,8 @@ void DtBlkFxAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     buffer.clear(i, 0, buffer.getNumSamples());
 
   if (core) {
+    updateTimeInfo();
+
     // getArrayOfWritePointers() returns float* const* as of JUCE 7 (the
     // pointed-to samples are still mutable, only the array of pointers is
     // const); processReplacing predates that and wants float**.

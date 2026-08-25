@@ -4,6 +4,32 @@
 #include "core/BlkFxParam.h"
 #include "core/DtBlkFx.hpp" // For GetFxRun1_0
 
+namespace {
+
+// Every readout in the editor comes from the parameter itself, so the GUI and
+// the host can never disagree about what a value means. The two lambdas map
+// between the slider's own range and the parameter's 0..1.
+void useParamText(juce::Slider& s,
+                  juce::AudioProcessorValueTreeState& apvts,
+                  const juce::String& paramId,
+                  std::function<double(double)> sliderToParam = [](double v) { return v; },
+                  std::function<double(double)> paramToSlider = [](double v) { return v; })
+{
+  auto* param = apvts.getParameter(paramId);
+  if (param == nullptr)
+    return;
+
+  s.textFromValueFunction = [param, sliderToParam](double v) {
+    return param->getText((float)sliderToParam(v), 0);
+  };
+  s.valueFromTextFunction = [param, paramToSlider](const juce::String& t) {
+    return paramToSlider((double)param->getValueForText(t));
+  };
+  s.updateText();
+}
+
+} // namespace
+
 //==============================================================================
 HeaderComponent::HeaderComponent(juce::AudioProcessorValueTreeState& apvts)
     : apvts(apvts)
@@ -53,6 +79,26 @@ HeaderComponent::HeaderComponent(juce::AudioProcessorValueTreeState& apvts)
     l.setJustificationType(juce::Justification::centred);
     l.setColour(juce::Label::textColourId, juce::Colours::white);
   };
+
+  // Readouts. The mix slider runs "wet", i.e. the inverse of MixBack, and the
+  // delay and overlap sliders run 0..10 over the parameter's 0..1.
+  useParamText(
+      mixSlider,
+      apvts,
+      DtBlkFxAudioProcessor::mixBackId,
+      [](double v) { return 1.0 - v; },
+      [](double v) { return 1.0 - v; });
+  useParamText(delaySlider,
+               apvts,
+               DtBlkFxAudioProcessor::paramId(BlkFxParam::DELAY),
+               [](double v) { return v * 0.1; },
+               [](double v) { return v * 10.0; });
+  useParamText(fftLenSlider, apvts, DtBlkFxAudioProcessor::paramId(BlkFxParam::FFT_LEN));
+  useParamText(overlapSlider,
+               apvts,
+               DtBlkFxAudioProcessor::overlapId,
+               [](double v) { return v * 0.1; },
+               [](double v) { return v * 10.0; });
 
   addLabel(mixLabel, "Dry/Wet");
   addLabel(delayLabel, "Delay");
@@ -169,6 +215,14 @@ void HeaderComponent::updateOverlapParam()
     param->setValueNotifyingHost((float)overlapSlider.getValue() / 10.0f);
   if (auto* param = apvts.getParameter(DtBlkFxAudioProcessor::syncId))
     param->setValueNotifyingHost(syncButton.getToggleState() ? 1.0f : 0.0f);
+}
+
+void HeaderComponent::refreshTexts()
+{
+  // BlkLen and Overlap both read something derived from the block length,
+  // which Delay caps -- so moving one changes the text under another.
+  for (auto* s : {&mixSlider, &delaySlider, &fftLenSlider, &overlapSlider})
+    s->updateText();
 }
 
 void HeaderComponent::paint(juce::Graphics& g)
@@ -340,25 +394,14 @@ ParameterRowComponent::ParameterRowComponent(DtBlkFxAudioProcessor& p, int index
   catch (...) {
   }
 
-  // Dynamic label logic for Amp
-  ampSlider.textFromValueFunction = [this, index](double value) {
-    if (processor.core) {
-      float db = BlkFxParam::getEffectAmp((float)value);
-      return juce::String(db, 1) + " dB";
-    }
-    return juce::String(value, 2);
-  };
-
-  // Freq A/B Display (0-22kHz)
-  auto freqDisplay = [this](double value) {
-    float hz = BlkFxParam::getHz((float)value);
-    if (hz < 1000.0f)
-      return juce::String(hz, 0) + " Hz";
-    else
-      return juce::String(hz / 1000.0f, 1) + " kHz";
-  };
-  freqASlider.textFromValueFunction = freqDisplay;
-  freqBSlider.textFromValueFunction = freqDisplay;
+  // Readouts, straight from the parameters. Amp switches between dB and a mix
+  // percentage, frequencies snap to the real FFT bin, and a control the
+  // current effect does not use reads "-" -- all decided by the engine, so
+  // hand-rolling any of it here just makes the GUI disagree with the host.
+  useParamText(freqASlider, apvts, "param_" + juce::String(baseIndex + BlkFxParam::FX_FREQ_A));
+  useParamText(freqBSlider, apvts, "param_" + juce::String(baseIndex + BlkFxParam::FX_FREQ_B));
+  useParamText(ampSlider, apvts, "param_" + juce::String(baseIndex + BlkFxParam::FX_AMP));
+  useParamText(valSlider, apvts, "param_" + juce::String(baseIndex + BlkFxParam::FX_VAL));
   // Lock Button
   addAndMakeVisible(lockButton);
   lockButton.setButtonText("Lock");
@@ -411,6 +454,14 @@ ParameterRowComponent::ParameterRowComponent(DtBlkFxAudioProcessor& p, int index
       lastActiveTypeId = typeBox.getSelectedId();
     }
   };
+}
+
+void ParameterRowComponent::refreshTexts()
+{
+  // The effect type decides what the other four read, and the frequencies also
+  // follow the block length, which lives on another component entirely.
+  for (auto* s : {&freqASlider, &freqBSlider, &ampSlider, &valSlider})
+    s->updateText();
 }
 
 void ParameterRowComponent::paint(juce::Graphics& g)
@@ -868,6 +919,17 @@ void DtBlkFxEditor::timerCallback()
   }
 
   updateInterpolation();
+
+  // Readouts follow each other around -- the effect type changes what its row
+  // reads, the delay changes what BlkLen and Overlap read -- so rather than
+  // wiring every dependency by hand, refresh the lot a few times a second.
+  // updateText() is a no-op when the string has not changed.
+  if (++textRefreshTick >= 6) {
+    textRefreshTick = 0;
+    header.refreshTexts();
+    for (auto& row : paramRows)
+      row->refreshTexts();
+  }
 }
 
 void DtBlkFxEditor::paint(juce::Graphics& g)

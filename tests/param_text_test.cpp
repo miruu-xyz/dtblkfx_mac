@@ -68,6 +68,21 @@ void dump(DtBlkFxAudioProcessor& p, const juce::String& id)
   std::printf("\n");
 }
 
+// A host that reports a steady 120 BPM. The VST2 stub used to hand the engine
+// an uninitialised VstTimeInfo, so everything tempo-driven -- delay in beats,
+// block sync, the parameter interpolation window -- ran on garbage.
+struct FixedTempoPlayHead : juce::AudioPlayHead {
+  juce::Optional<PositionInfo> getPosition() const override
+  {
+    PositionInfo info;
+    info.setBpm(120.0);
+    info.setPpqPosition(0.0);
+    info.setTimeInSamples(0);
+    info.setIsPlaying(true);
+    return info;
+  }
+};
+
 } // namespace
 
 int main()
@@ -131,6 +146,36 @@ int main()
     check(sec.getUnits() == BlkFxParam::Delay::MSEC, "\"1.20sec\" did not select msec");
     check(std::abs(sec.getAmount() - 1200.0f) < 1.0f,
           "\"1.20sec\" -> " + juce::String(sec.getAmount()) + " msec");
+  }
+
+  // Delay in beats has to follow the host tempo. At 120 BPM a two-beat delay
+  // is one second, and that is what the parameter must read back.
+  {
+    FixedTempoPlayHead playHead;
+    p.setPlayHead(&playHead);
+
+    juce::AudioBuffer<float> block(2, 512);
+    juce::MidiBuffer midi;
+    for (int i = 0; i < 8; ++i) {
+      block.clear();
+      p.processBlock(block, midi);
+    }
+
+    // The beats readout divides by the same samples-per-beat it multiplied by,
+    // so it round-trips at any tempo and proves nothing on its own. What broke
+    // was the figure underneath it: check that instead.
+    check(std::abs(p.core->getSampsPerBeat() - 22050.0f) < 1.0f,
+          "120 BPM at 44.1kHz should be 22050 samples per beat, got " +
+              juce::String(p.core->getSampsPerBeat()));
+
+    // With that at zero -- which is what an uninitialised VstTimeInfo produced
+    // -- a beats delay collapsed to getDelaySamps' 100-sample floor, so no
+    // delay was applied and BlkLen was permanently capped.
+    const long samps = p.core->getDelaySamps(BlkFxParam::Delay::beats(2.0f));
+    check(std::abs(samps - 44100L) < 2L,
+          "two beats at 120 BPM should be 44100 samples, got " + juce::String((int)samps));
+
+    p.setPlayHead(nullptr);
   }
 
   // Note-name entry on the frequency params. The original never wired this up,

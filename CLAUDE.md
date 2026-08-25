@@ -106,10 +106,25 @@ Things in this codebase that have already cost time, or are waiting to:
   typedefs `uint32` to `unsigned long`, and `LittleEndianMemStr::put32/get32`
   assume four bytes. Anything touching chunk serialisation needs checking
   against this.
-- **`vst2_stub.h` leaves `VstTimeInfo` uninitialised** and hands the same
-  instance back from every `getTimeInfo()` call, so the engine's tempo tracking
-  reads whatever is on the stack. `setInitialDelay()` is a no-op, so plugin
-  latency is never reported to the host. The harness pins `timeInfo` explicitly.
+- **The engine's only source of tempo is `vst2_stub.h`'s one `VstTimeInfo`,
+  which nothing used to fill in.** It was an indeterminate POD, so a stray
+  `kVstTempoValid` bit over a garbage tempo left `_samps_per_beat` at zero:
+  a beats-mode delay collapsed to `getDelaySamps`' 100-sample floor (no audible
+  delay), BlkLen was therefore always shorter than the delay and always showed
+  the asterisk, and the readout divided by zero and printed `inf beats`. It is
+  value-initialised now, and `DtBlkFxAudioProcessor::updateTimeInfo()` copies
+  the host's tempo, PPQ position and time signature into it every block. Block
+  sync and the parameter interpolation window read from the same place, so
+  anything tempo-related that looks wrong starts here. The harness pins
+  `timeInfo` explicitly and does not exercise this path.
+- **`setInitialDelay()` is a no-op**, so plugin latency is never reported to the
+  host.
+- **Editor readouts must come from the parameters, not from hand-rolled
+  formatting.** `useParamText` in `src/DtBlkFxEditor.cpp` points a slider's
+  `textFromValueFunction` at its `RangedAudioParameter`, so the GUI and the host
+  cannot disagree. Hand-rolling it is how the amp knob ended up stuck on dB
+  while the host correctly switched to a mix percentage. Slider ranges that are
+  not 0..1 pass a mapping pair.
 - **Two engine display functions ignore the value you pass them.**
   `getParamDisplayGlobal`'s `FFT_LEN` branch calls `guessFFTLen()`, which reads
   the engine's own fft-len param, and `FxState1_0::getParamDisplay`'s `FX_TYPE`
