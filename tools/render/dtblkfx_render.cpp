@@ -16,12 +16,16 @@
  * It is a change detector, not a correctness oracle. A FAIL means "the audio
  * moved"; whether that is a fix or a regression is still a human call.
  *
- * Each case is rendered in its own process. That is not paranoia: state leaks
- * between DtBlkFx instances — a second instance in the same process picks up
- * what the first left behind — so a whole-sweep run gives different numbers
- * every time, occasionally including bursts of tens of thousands of NaN
- * samples. One case per process is reproducible to the bit. Use --in-process
- * to watch the bug instead; see docs/ROADMAP.md, Phase 3.
+ * Each case is rendered in its own process by default. That used to be load-
+ * bearing rather than just cheap insurance: DtBlkFx read uninitialised
+ * fftwf_malloc memory on an instance's first FFT window, so a whole-sweep run
+ * in one process picked up whatever a previous instance left on the heap and
+ * gave different numbers every time, occasionally including bursts of tens of
+ * thousands of NaN samples. Fixed in Phase 3 (see docs/ROADMAP.md) by clearing
+ * those buffers once in the constructor. --in-process now agrees with
+ * isolated rendering to the bit (--repeat proves it via the fingerprint hash,
+ * below); it is kept because it is the only mode that models what a DAW
+ * actually hands an instance — recycled heap, not fresh pages.
  *
  * Usage:
  *   dtblkfx_render --list
@@ -46,6 +50,14 @@
 #include <fstream>
 #include <string>
 #include <vector>
+
+// Smear (fx02) randomises phase from a single process-global PRBS
+// (FxRun1_0.cpp) shared and never reseeded by design -- see docs/ROADMAP.md,
+// Phase 3. It is the one thing in the engine meant to be non-deterministic, so
+// rather than exempt it from the reproducibility check, pin it from the test
+// side: reset it before every render so repeated in-process renders of the
+// same case see the same seed. This does not touch engine behaviour.
+extern long g_rand_i;
 
 namespace {
 
@@ -196,7 +208,31 @@ struct Fingerprint {
   double correlation = 0;       // L/R Pearson correlation; ~1.0 means collapsed
   int nonFinite = 0;            // NaN or Inf samples, must always be 0
   double band[kNumBands] = {0}; // per-band energy, dB, left+right summed
+  uint64_t hash = 0;            // FNV-1a over the raw L/R sample bytes; see below
+  bool hasHash = false;         // false for baseline lines predating the hash column
 };
+
+// FNV-1a over the raw output samples. This is bit-exact by construction, which
+// is the point: the tolerant metrics above are sized to absorb legitimate
+// cross-machine differences (slice, FFTW planner noise) and so cannot see a
+// same-machine state leak that biases output by less than 0.05 dB. The hash
+// can. It is only meaningful comparing renders from the same binary on the
+// same machine -- see docs/ROADMAP.md, Phase 2.1.
+uint64_t fnv1a(const void* data, size_t n, uint64_t h = 1469598103934665603ull)
+{
+  const unsigned char* p = (const unsigned char*)data;
+  for (size_t i = 0; i < n; ++i) {
+    h ^= p[i];
+    h *= 1099511628211ull;
+  }
+  return h;
+}
+
+uint64_t hashSamples(const std::vector<float>& l, const std::vector<float>& r)
+{
+  uint64_t h = fnv1a(l.data(), l.size() * sizeof(float));
+  return fnv1a(r.data(), r.size() * sizeof(float), h);
+}
 
 double toDb(double lin)
 {
@@ -276,6 +312,8 @@ Fingerprint analyse(const std::vector<float>& l, const std::vector<float>& r)
     fp.peak[c] = toDb(fp.peak[c]);
 
   analyseBands(l, r, fp.band);
+  fp.hash = hashSamples(l, r);
+  fp.hasHash = true;
   return fp;
 }
 
@@ -283,6 +321,8 @@ Fingerprint analyse(const std::vector<float>& l, const std::vector<float>& r)
 void render(const Case& c, std::vector<float>& outL, std::vector<float>& outR)
 {
   using namespace BlkFxParam;
+
+  g_rand_i = 1;
 
   std::vector<float> inL, inR;
   makeInput(inL, inR);
@@ -404,6 +444,8 @@ std::string formatLine(const std::string& name, const Fingerprint& fp)
                         fp.nonFinite);
   for (int b = 0; b < kNumBands; ++b)
     n += std::snprintf(buf + n, sizeof buf - (size_t)n, " %8.3f", fp.band[b]);
+  n += std::snprintf(
+      buf + n, sizeof buf - (size_t)n, "  hash %016llx", (unsigned long long)fp.hash);
   return buf;
 }
 
@@ -437,6 +479,15 @@ bool parseLine(const std::string& line, std::string& name, Fingerprint& fp)
       return false;
     p = end;
   }
+
+  // Optional trailing "hash <hex>", absent from baselines predating Phase 2.1.
+  char hashWord[16];
+  char hashHex[32];
+  if (std::sscanf(p, "%15s %31s", hashWord, hashHex) == 2 && std::strcmp(hashWord, "hash") == 0) {
+    fp.hash = std::strtoull(hashHex, nullptr, 16);
+    fp.hasHash = true;
+  }
+
   name = nameBuf;
   return true;
 }
@@ -530,9 +581,10 @@ int usage()
                "  --print                render one case, print its fingerprint\n"
                "  --case <name>          restrict to one case\n"
                "  --block <n>            host block size (default 512; baselines use 512)\n"
-               "  --repeat <n>           render each case n times; catches instability\n"
-               "  --in-process           skip per-case process isolation (shows the\n"
-               "                         uninitialised-memory bug; not reproducible)\n");
+               "  --repeat <n>           render each case n times; hash-compares the repeats\n"
+               "                         to catch same-machine instability (see Phase 2.1)\n"
+               "  --in-process           skip per-case process isolation; models a DAW's\n"
+               "                         recycled heap instead of a fresh process's zeroed one\n");
   return 2;
 }
 
@@ -641,16 +693,24 @@ int main(int argc, char** argv)
       fp = analyse(l, r);
     }
 
-    // --repeat exists because the engine is not currently stable across
-    // instances in one process. Any variation printed here is that bug, not
-    // anything to do with the host or the test signal.
+    // --repeat exists to catch same-machine, same-binary instability -- so the
+    // only correct comparison is bit-exact (the hash), not the tolerant
+    // fingerprint: the tolerance is sized for cross-machine baseline checks
+    // and can hide a small state-leak bias. See docs/ROADMAP.md, Phase 2.1.
     for (int rep = 1; rep < repeat; ++rep) {
       std::vector<float> l2, r2;
       render(c, l2, r2);
       const Fingerprint fp2 = analyse(l2, r2);
-      std::string why;
-      if (!compare(fp, fp2, why))
-        std::printf("UNSTABLE %s run %d: %s\n", c.name.c_str(), rep + 1, why.c_str());
+      if (fp.hash != fp2.hash) {
+        std::string why;
+        compare(fp, fp2, why); // best-effort detail; the hash made the call
+        std::printf("UNSTABLE %s run %d: hash %016llx -> %016llx  %s\n",
+                    c.name.c_str(),
+                    rep + 1,
+                    (unsigned long long)fp.hash,
+                    (unsigned long long)fp2.hash,
+                    why.c_str());
+      }
     }
 
     if (mode == "--print") {
@@ -683,8 +743,19 @@ int main(int argc, char** argv)
 
     ++checked;
     std::string why;
+    // A hash difference against the committed baseline is advisory, not a
+    // failure: it legitimately moves with the compiled slice and FFTW planner
+    // noise. It is only meaningful same-machine (--repeat); see the hash
+    // comment above and docs/ROADMAP.md, Phase 2.1.
+    const bool hashDiffers = want->hasHash && fp.hasHash && want->hash != fp.hash;
     if (compare(*want, fp, why)) {
-      std::printf("ok    %s\n", c.name.c_str());
+      if (hashDiffers)
+        std::printf("ok    %s  (hash %016llx -> %016llx)\n",
+                    c.name.c_str(),
+                    (unsigned long long)want->hash,
+                    (unsigned long long)fp.hash);
+      else
+        std::printf("ok    %s\n", c.name.c_str());
     }
     else {
       std::printf("FAIL  %s: %s\n", c.name.c_str(), why.c_str());

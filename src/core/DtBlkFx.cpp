@@ -146,6 +146,16 @@ DtBlkFx::DtBlkFx(audioMasterCallback audioMaster)
         32 * 2); // inverse FFT & temporary buffer with space either side for shift overflow
     _chan[i].x3.resize(
         _x3_sz); // output buffer (length is arbitrary, as long as > MAX_FFT_SZ plus a few)
+
+    // fftwf_malloc does not zero. Recycled heap pages (the normal case once a
+    // DAW session has been running) hand these back full of whatever the
+    // previous instance left, and the first FFT window transforms that
+    // straight into the output -- including NaN bit patterns. Clear once,
+    // here, so every instance starts like a freshly launched process. See
+    // docs/ROADMAP.md, Phase 3.
+    Clear((float*)_chan[i].x0, _x0_sz + MAX_FFT_SZ);
+    Clear((cplxf*)_chan[i].x1, MAX_FFT_SZ / 2 + 32 * 2);
+    Clear((float*)_chan[i].x2, MAX_FFT_SZ + 32 * 2);
   }
   _max_delay_n = _x3_sz - MAX_FFT_SZ - 2048;
 

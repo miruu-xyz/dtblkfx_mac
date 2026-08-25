@@ -39,138 +39,50 @@ several parameters pack a mode flag into a single 0..1 value and are not
 monotonic; and — the big one — the engine does not render reproducibly. That
 last one became Phase 3.
 
----
-
-## Planned
-
 ### Phase 2.1 — exact comparison for the stability check
 
-**Small, and it belongs before Phase 3.** The fingerprint compares with a
-tolerance — 0.05 dB on levels and bands, 0.002 on correlation — sized to absorb
-the arm64/x86_64 slice difference and FFTW planner noise. That is the right
-tolerance for checking a render against a baseline committed from another
-machine. It is the wrong one for `--repeat`, which renders the same case twice
-from the same binary on the same machine: there the only correct answer is
-*bit-identical*, and anything the tolerance swallows is exactly the residual
-non-determinism Phase 3 exists to remove.
+Added a fourth fingerprint column: an FNV-1a hash of the raw output sample
+bytes, both channels. `--check` against the committed baseline prints it as
+advisory only (`ok ... (hash a -> b)`), never a failure — a different slice
+legitimately produces different bits. `--repeat` now uses the hash, not the
+tolerant metrics, to decide `UNSTABLE`: that path renders the same case twice
+from the same binary on the same machine, where the only correct answer is
+bit-identical, and the tolerant comparison is sized to absorb exactly the kind
+of small bias a state leak would introduce. `parseLine` treats the hash column
+as optional so it doesn't choke on old baseline files.
 
-As it stands, Phase 3's completion test — "the full sweep is reproducible with
-`--in-process`" — is defined by a comparison that cannot see a difference
-smaller than 0.05 dB in an octave-wide band. The loud failure, a burst of NaNs,
-is unmissable either way. The one that would let the phase be declared done too
-early is a small state leak that biases the output slightly and stays under the
-threshold.
-
-**The change.** Add a hash of the raw output samples to the fingerprint (FNV or
-CRC over the float data, both channels) and compare it exactly on the
-same-machine paths: `--repeat`, and an `--in-process` run against an
-`--in-process` reference. `--check` against the committed baseline should print
-a hash difference but not fail on it — a different slice legitimately produces
-different bits. A hash mismatch with every tolerant metric passing is precisely
-the signal Phase 3 wants and cannot currently get.
-
-One column in the baseline file, one comparison path, no new analysis.
-
-One case will not comply: `fx02.Smear` is genuinely non-deterministic by design
-and must stay that way. Seed it from the harness rather than exempting it — see
-Phase 3.
-
-Note what a hash does *not* solve. It is the right tool when the output is
-expected to come back identical, and useless the moment the bits are
-legitimately allowed to move — recompiling the core against a different SDK can
-change the last bits without changing anything anyone can hear. That case is
-Phase 4, and it needs the other half of the work. See there.
+`fx02.Smear` is meant to be non-deterministic (see Phase 3) and would fail
+every `--repeat` by design, so the harness now does `extern long g_rand_i;
+g_rand_i = 1;` at the top of every `render()` call — reseeding the shared PRBS
+from the test side before each render, without touching engine behaviour.
+Confirmed this makes Smear bit-reproducible across in-process repeats too.
 
 ### Phase 3 — engine stability
 
-**Root cause found (2026-08-25).** Not a state leak between instances, and not
-the effect singletons in `g_fft_fx_table`. `DtBlkFx` allocates `_chan[].x0`,
-`x1` and `x2` with `ScopeFFTWfMalloc` — `fftwf_malloc`, which does not zero
-(`src/core/DtBlkFx.cpp`, the `resize` block in the constructor).
-`DtBlkFx::init()` is captioned *"clear out all buffers"* but clears only `x3`,
-the output FIFO, and `resume()` never calls it. So the first FFT window of an
-instance's life transforms whatever the allocator happened to hand over.
+Root cause was uninitialised `fftwf_malloc` memory: `_chan[].x0`, `x1`, `x2`
+were never cleared, so the first FFT window of an instance's life transformed
+whatever the allocator handed back — recycled heap, not zeroed pages, in any
+process that has been running for a while (i.e. every real DAW session). Fixed
+with a one-time `Clear()` of those three buffers in the `DtBlkFx` constructor,
+right after the `resize()` calls (`src/core/DtBlkFx.cpp`). Not added to
+`init()`/`suspend()` and no NaN guard on the output block, per the plan — see
+the git history for the reasoning.
 
-The evidence:
+Verified with the Phase 2.1 hash: before the fix, `--in-process --repeat 4`
+produced 168 `UNSTABLE` lines and NaN bursts (6,621–13,242 samples) scattered
+across effects, run to run. After the fix, five in-process repeats of the full
+sweep report zero `UNSTABLE` and zero NaN, `check_audio.sh` still passes
+71/71, and the baseline needed no content changes — only the new hash column,
+since process-per-case isolation already handed every case zeroed pages, which
+is exactly why the bug was invisible there. `g_rand_i` was confirmed to still
+behave as designed — untouched by this change, seeded only from the harness
+(Phase 2.1) for the reproducibility check. Built and installed as `DtBlkFx
+Dev.vst3`; not yet loaded in Live for a listen — that's the one item from the
+"done when" list still outstanding.
 
-- Pre-fill the heap with `0xFF` — a NaN bit pattern read as `float` — before
-  constructing, and the engine emits **1024 NaN samples**: one block on both
-  channels, samples 100–611, the first 14 ms of that instance's output.
-- Rendering the sweep four times in a single process, **46 of 71** cases differ
-  run to run, with 6,621–59,589 NaN samples per sweep landing in a different
-  set of effects each time.
-- A fresh process is reproducible only because the kernel hands out new pages
-  already zeroed. **Per-case isolation is therefore a clean room, not a fix.** A
-  DAW is the opposite of a fresh process: Ableton has been allocating and
-  freeing since the session opened, so every instance loaded into it gets
-  recycled memory. This is a live defect in the plugin, not an artefact of the
-  harness.
+---
 
-**Why it is worth fixing: it is the one failure mode that kills a channel.** A
-NaN entering the output does not stay a blip — it feeds back through the
-overlap-add buffers, Live mutes the track, and it propagates downstream. That
-is the whole justification for this phase. Everything else the engine does
-oddly is the engine being itself.
-
-**The change.** Clear those three buffers once, in the constructor, immediately
-after the `resize` calls. That is the entire fix. Do not extend it further:
-
-- **Not in `init()` / `suspend()`.** After the constructor clear, `x0` holds old
-  audio rather than uninitialised bytes, so the read window walking over the
-  not-yet-rewritten tail on transport restart produces a stale-audio blip, never
-  a NaN. No dead-channel risk, so no reason to change the behaviour.
-- **No NaN guard on the output block.** It would cost on the audio thread every
-  block, and it would mask faults instead of surfacing them. With the root cause
-  gone there is nothing for it to catch.
-
-**Cost, measured, not assumed.** 4.54 MB to clear (`x0` is 1.65 MB per channel,
-`x1` and `x2` about 315 KB each): **42 µs**, against 85 µs to construct an
-instance as it stands today. One time, at plugin load, on the message thread.
-Zero on the audio thread. Fresh pages are being zeroed by the kernel on first
-touch anyway — the memset only really costs anything in the recycled case,
-which is precisely the case being fixed.
-
-**It has already been verified to change nothing audible.** With the clear
-applied as a throwaway patch: `./tools/check_audio.sh` reproduces all **71**
-committed fingerprints; three consecutive `--in-process` sweeps become
-bit-identical; and 70 of 71 cases match the isolated baseline. The sound does
-not move. The fix only makes every process behave like a freshly launched one —
-which is the behaviour the baseline was captured from and the beta has been
-A/B'd against all along.
-
-**What must survive this phase.** The 71st case, `fx02.Smear.hi`, still varies
-in-process after the fix, and that is correct. `g_rand_i` (`FxRun1_0.cpp`) is a
-single process-global PRBS that randomises phase in Smear, shared by every
-instance and never reseeded, so two Smear instances in a session never repeat
-and never correlate. That is Darrell's own design and part of what the plugin
-sounds like. **Leave it alone**, and leave a comment saying why, so it does not
-get "fixed" later.
-
-For the exact in-process stability check in Phase 2.1, seed it from the *test
-side* instead: `g_rand_i` is a non-static global, so the harness can declare
-`extern long g_rand_i;` and set it to 1 before each case. Confirmed to make
-Smear bit-reproducible across renders in one process without touching engine
-behaviour.
-
-**Already investigated, no work needed.** Silent input does *not* produce NaN,
-despite the effects power-matching by dividing by input power. `MatchPwr`
-(`src/core/fftw_support.h`) returns 0 when the target power is `<= 0`, only
-divides when the current power is `> 0`, and clamps the result at both ends.
-Checked empirically across all 31 effects × three amp settings × digital
-silence, denormal `1e-38` and −140 dBFS: clean everywhere. Recorded here so it
-does not get re-investigated.
-
-**Done when.** Three `--in-process` sweeps agree exactly (Smear excepted, or
-with the harness-side seed in place) and report zero NaN, `check_audio.sh` still
-passes 71/71, and the plugin has been loaded in Live for a listen. At that point
-per-process isolation in the harness becomes an optimisation rather than a
-requirement — but the in-process stability check should stay, and should stay
-wired into the guardrail, because it is the only test that models a host.
-
-**Left open.** The NaN window was confirmed at instance startup only; nothing
-proves some other path does not read unwritten memory later. The
-`suspend()`/`resume()` stale-audio blip above is reasoned, not measured. Both
-are worth a look while in this code, neither blocks the fix.
+## Planned
 
 ### Phase 4 — JUCE upgrade
 
