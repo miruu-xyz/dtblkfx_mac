@@ -1,10 +1,8 @@
-# DtBlkFx Revision 1.1
+# DtBlkFx Revision 2.1
 
 *VST audio effect plugin by Darrell Tam*
 
 ### User Guide
-
-Compile date April 2008, Microsoft Windows version
 
 This software incorporates code from *fastest-fourier-transform-in-the-west 3.1.2* ([www.fftw.org](http://www.fftw.org)), portable network graphics library code from *libpng*/*zlib* ([www.libpng.org](http://www.libpng.org)/[www.zlib.net](http://www.zlib.net)), *Steinberg VST plugin SDK 2.3* and Steinberg *VSTGUI 3.5*. VST is a trademark of Steinberg Media Technologies GmbH. User manual diagrams incorporate graphics from [ian.umces.edu](http://www.ian.umces.edu).
 
