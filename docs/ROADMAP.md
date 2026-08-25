@@ -77,8 +77,8 @@ since process-per-case isolation already handed every case zeroed pages, which
 is exactly why the bug was invisible there. `g_rand_i` was confirmed to still
 behave as designed — untouched by this change, seeded only from the harness
 (Phase 2.1) for the reproducibility check. Built and installed as `DtBlkFx
-Dev.vst3`; not yet loaded in Live for a listen — that's the one item from the
-"done when" list still outstanding.
+Dev.vst3` and tested in Live — sounds unchanged. That was the last item on
+the "done when" list.
 
 ---
 
