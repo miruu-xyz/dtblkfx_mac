@@ -127,3 +127,10 @@ Things in this codebase that have already cost time, or are waiting to:
 - Warnings inside `src/core/` are suppressed on purpose (`-w`, and the headers
   are `SYSTEM` includes). Do not "clean up" the engine's warnings; that is how
   behaviour changes sneak in.
+- **`origin` is a fork of `upstream` (`hai0ri/dtblkfx_mac`).** `gh pr create`
+  without `--repo` targets the parent of a fork, not `origin` — it will open
+  the PR against `hai0ri/dtblkfx_mac` instead of `miruu-xyz/dtblkfx_mac`. This
+  has already happened once (accidentally opened, then closed,
+  [hai0ri/dtblkfx_mac#2](https://github.com/hai0ri/dtblkfx_mac/pull/2)).
+  Always pass `--repo miruu-xyz/dtblkfx_mac` explicitly when creating a PR,
+  and double check the returned URL's owner before reporting it back.
