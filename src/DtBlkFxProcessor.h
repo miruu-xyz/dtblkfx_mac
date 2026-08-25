@@ -33,6 +33,10 @@ public:
   void prepareToPlay(double sampleRate, int samplesPerBlock) override;
   void releaseResources() override;
 
+  // Copy the host's tempo and transport position into the VST2 stub's
+  // VstTimeInfo, which is where the engine looks for them.
+  void updateTimeInfo();
+
   bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
 
   void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
@@ -62,7 +66,38 @@ public:
   DtBlkFx* core = nullptr;
 
   juce::AudioProcessorValueTreeState apvts;
-  static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+  juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+  // --- host parameter ids -----------------------------------------------------
+  //
+  // Indices 1 (DELAY), 2 (FFT_LEN) and 4..43 (the eight effect sets) keep the
+  // historic "param_<n>" ids so existing automation survives.
+  //
+  // MIX_BACK (0) and OVERLAP (3) do not: each packed two independent controls
+  // into one non-monotonic float, which a host cannot present sensibly. They
+  // are replaced by two host parameters each and recombined with
+  // BlkFxParam::getMixbackParam / getOverlapParam on the way to the engine, so
+  // the engine still sees exactly one float per value. See docs/ROADMAP.md,
+  // Phase 5.
+  static constexpr auto mixBackId = "mixBack";
+  static constexpr auto powerId = "power";
+  static constexpr auto overlapId = "overlap";
+  static constexpr auto syncId = "sync";
+
+  // "param_<n>", or an empty string for the two replaced packed params.
+  static juce::String paramId(int index);
+
+  // Text the host shows for one engine parameter, produced by the engine's own
+  // display code so it reads exactly as the original plugin did.
+  juce::String coreParamText(int index, float v);
+
+  // BlkLen and Overlap get their own: the engine's display code ignores the
+  // value it is given for BlkLen, and Overlap is no longer one packed value.
+  // See the definitions.
+  long guessBlkLen(float fftLenParam, bool& capped);
+  juce::String blkLenText(float v);
+  juce::String overlapText(float part);
+  float overlapValueForText(const juce::String& text);
 
   // FIFO for spectrogram data
   // Using a simple lock-free FIFO for now. In a real app, use AbstractFifo.
@@ -92,5 +127,17 @@ public:
   static constexpr auto limiterEnabledId = "limiterEnabled";
 
 private:
+  // Host parameter text is cached: Live will not re-query a parameter just
+  // because a different one moved. FX_TYPE changes what FrqA/FrqB/Amp/Val
+  // print, and DELAY changes what BlkSz and Ovrlp print, so a change to either
+  // has to invalidate the lot. Coalesced onto the message thread because
+  // automation can move a parameter every block.
+  struct DisplayRefresher : juce::AsyncUpdater {
+    explicit DisplayRefresher(DtBlkFxAudioProcessor& o) : owner(o) {}
+    void handleAsyncUpdate() override { owner.updateHostDisplay(); }
+    DtBlkFxAudioProcessor& owner;
+  };
+  DisplayRefresher displayRefresher{*this};
+
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DtBlkFxAudioProcessor)
 };

@@ -19,7 +19,11 @@
 
 #include "DtBlkFxProcessor.h"
 #include "DtBlkFxEditor.h"
+#include "FxRun1_0.h"
+#include "FxState1_0.h"
+#include "NoteFreq.h"
 #include "rfftw_float.h"
+#include <limits>
 
 DtBlkFxAudioProcessor::DtBlkFxAudioProcessor()
     : AudioProcessor(BusesProperties()
@@ -49,72 +53,376 @@ DtBlkFxAudioProcessor::DtBlkFxAudioProcessor()
     pushOutputSpectrogramData(data, numBins);
   };
 
-  // Add listeners
+  // Add listeners and sync the engine to the initial parameter values.
   for (int i = 0; i < BlkFxParam::TOTAL_NUM; ++i) {
-    apvts.addParameterListener("param_" + juce::String(i), this);
-    // Sync initial values
-    core->setParameter(i, apvts.getRawParameterValue("param_" + juce::String(i))->load());
+    const auto id = paramId(i);
+    if (id.isEmpty())
+      continue; // replaced by a pair, handled below
+    apvts.addParameterListener(id, this);
+    core->setParameter(i, apvts.getRawParameterValue(id)->load());
   }
+
+  for (auto* id : {mixBackId, powerId, overlapId, syncId})
+    apvts.addParameterListener(id, this);
+
+  // One call each is enough: parameterChanged reads the partner itself.
+  parameterChanged(mixBackId, apvts.getRawParameterValue(mixBackId)->load());
+  parameterChanged(overlapId, apvts.getRawParameterValue(overlapId)->load());
+}
+
+// --- text helpers -------------------------------------------------------------
+//
+// The engine prints its own parameter text (see DtBlkFx::getParamDisplayGlobal
+// and FxState1_0::getParamDisplay) and that is what the host shows, so the
+// readouts match the original plugin. These helpers only cover the inverse
+// direction -- turning typed text back into a 0..1 parameter -- plus the two
+// packed globals, which no longer reach the engine display code as one value.
+
+namespace {
+
+// "1.20sec" / "227msec" / "5.80usec" / a bare number of seconds.
+double parseSeconds(const juce::String& text)
+{
+  const auto s = text.trim().toLowerCase();
+  const double v = s.getDoubleValue();
+  if (s.contains("usec") || s.contains("us"))
+    return v * 1.0e-6;
+  if (s.contains("msec") || s.contains("ms"))
+    return v * 1.0e-3;
+  return v;
+}
+
+// "440Hz" / "1.20kHz" / a bare number of Hz.
+double parseHz(const juce::String& text)
+{
+  const auto s = text.trim().toLowerCase();
+  const double v = s.getDoubleValue();
+  return s.contains("khz") ? v * 1.0e3 : v;
+}
+
+// "50%" / "50" / "0.5" -> 0..1
+float parseFraction(const juce::String& text)
+{
+  const auto s = text.trim();
+  const double v = s.getDoubleValue();
+  return juce::jlimit(0.0f, 1.0f, (float)(s.contains("%") || v > 1.0 ? v * 0.01 : v));
+}
+
+// A note name as NoteToTxt prints it ("c-4:+00", "c#4:-45"), or -1 if the text
+// is not a note. NoteToTxt writes naturals as "c-4" but the lookup table is
+// keyed "c4", so the filler dash comes back out first.
+float noteTextToHz(const juce::String& text)
+{
+  auto s = text.trim().toLowerCase().removeCharacters(" ");
+  if (s.isEmpty() || s[0] < 'a' || s[0] > 'g')
+    return -1.0f;
+
+  const int colon = s.indexOfChar(':');
+  auto head = colon >= 0 ? s.substring(0, colon) : s;
+  const auto tail = colon >= 0 ? s.substring(colon) : juce::String();
+  if (head.length() >= 2 && head[1] == '-')
+    head = head.substring(0, 1) + head.substring(2);
+
+  return NoteToHz((head + tail).toStdString());
+}
+
+// Nearest available FFT plan to a block length in seconds.
+float fftLenParamForSeconds(double seconds, double sampleRate)
+{
+  const double want = seconds * (sampleRate > 0.0 ? sampleRate : 44100.0);
+  int best = 0;
+  double bestErr = std::numeric_limits<double>::max();
+  for (int i = 0; i < NUM_FFT_SZ; ++i) {
+    const double err = std::abs((double)g_fft_sz[i] - want);
+    if (err < bestErr) {
+      bestErr = err;
+      best = i;
+    }
+  }
+  return BlkFxParam::getFFTLenParam(best);
+}
+
+// The effect whose name matches, or -1.
+int effectIndexForName(const juce::String& text)
+{
+  const auto wanted = text.trim();
+  for (int i = 0; i < g_num_fx_1_0; ++i)
+    if (wanted.equalsIgnoreCase(GetFxRun1_0(i)->name()))
+      return i;
+  return -1;
+}
+
+} // namespace
+
+juce::String DtBlkFxAudioProcessor::paramId(int index)
+{
+  // MIX_BACK and OVERLAP have no single host parameter -- see the header.
+  if (index == BlkFxParam::MIX_BACK || index == BlkFxParam::OVERLAP)
+    return {};
+  return "param_" + juce::String(index);
+}
+
+juce::String DtBlkFxAudioProcessor::coreParamText(int index, float v)
+{
+  if (core == nullptr)
+    return {};
+
+  BlkFxParam::SplitParamNum p(index);
+  CharArray<64> buf;
+  std::memset(buf.data, 0, sizeof(buf.data));
+
+  // FxState1_0::getParamDisplay prints the name of the effect the set is
+  // *currently* on rather than the effect the value asks for -- fine for a
+  // VST2 host that only ever asks about the current value, useless in an
+  // automation lane. Same name, from the same table, but honouring v.
+  if (p.fx_param == BlkFxParam::FX_TYPE)
+    return GetFxRun1_0((int)BlkFxParam::getEffectType(v))->name();
+
+  // Both of these take the value as an argument and only read engine state, so
+  // asking for text never disturbs the audio. DtBlkFx::getParameterDisplay,
+  // which the VST2 build used, does the opposite -- it ignores the value and
+  // reads _params.getInput(index) -- so it is deliberately not used here.
+  if (core->getParamDisplayGlobal(p, v, buf) ||
+      (p.fx_set >= 0 && core->_fx1_0[p.fx_set].getParamDisplay(p, v, buf)))
+    return juce::String(buf.data);
+
+  // Param is in morph mode and not attached here; the engine falls back to a
+  // percentage, so do the same.
+  return juce::String(juce::roundToInt(v * 100.0f)) + "%";
+}
+
+long DtBlkFxAudioProcessor::guessBlkLen(float fftLenParam, bool& capped)
+{
+  using namespace BlkFxParam;
+
+  // This is DtBlkFx::guessFFTLen's arithmetic, driven by the value passed in
+  // rather than by the engine's own fft-len param. The engine's version ignores
+  // any value handed to it, which makes every point of an automation lane print
+  // the same length.
+  //
+  // The block shoulder is fixed at 0 (DtBlkFx::configParams1_0 calls
+  // setModeFixed), so the time-domain length equals the FFT length and the
+  // delay is the only thing that can cut it down.
+  const long plan = getPlan(fftLenParam);
+  long len = g_fft_sz[plan];
+  capped = false;
+
+  if (core != nullptr) {
+    const long delayN =
+        core->getDelaySamps(BlkFxParam::Delay(apvts.getRawParameterValue(paramId(DELAY))->load()));
+    if (len > delayN) {
+      len = g_fft_sz[DtBlkFx::reducePlan(plan, delayN)];
+      if (len > delayN)
+        len = delayN;
+      capped = true;
+    }
+  }
+  return len;
+}
+
+juce::String DtBlkFxAudioProcessor::blkLenText(float v)
+{
+  bool capped = false;
+  const long len = guessBlkLen(v, capped);
+
+  const float sr = (float)(getSampleRate() > 0.0 ? getSampleRate() : 44100.0);
+  CharArray<32> buf;
+  std::memset(buf.data, 0, sizeof(buf.data));
+  // sprnum + "sec" is exactly how the engine prints a block length.
+  CharRng(buf.data, (int)sizeof(buf.data)) << sprnum((float)len / sr) << "sec";
+
+  // docs/MANUAL.md: "If the specified Delay is less than the BlkLen specified
+  // then a smaller block length will be used and displayed with an asterisk".
+  return juce::String(buf.data) + (capped ? " *" : "");
+}
+
+// How far the engine steps forward per block, and therefore how much of each
+// block overlaps the last. The parameter asks for 0..100% of the available
+// range; what comes out tops at about 85%, because that is where
+// getBlkShiftFwd's interpolation ends. Both the engine
+// (DtBlkFx::getParamDisplayGlobal) and the original GUI (GlobalCtrl.cpp:228)
+// display the achieved figure, not the request, so this does too.
+juce::String DtBlkFxAudioProcessor::overlapText(float part)
+{
+  bool capped = false;
+  const long len = guessBlkLen(apvts.getRawParameterValue(paramId(BlkFxParam::FFT_LEN))->load(),
+                               capped);
+  if (len <= 0)
+    return "0%";
+
+  const long fwd = BlkFxParam::getBlkShiftFwd(part, (int)len);
+  return juce::String(juce::roundToInt((1.0f - (float)fwd / (float)len) * 100.0f)) + "%";
+}
+
+// Inverse of the above: what request lands on the overlap the user typed.
+float DtBlkFxAudioProcessor::overlapValueForText(const juce::String& text)
+{
+  bool capped = false;
+  const long len = guessBlkLen(apvts.getRawParameterValue(paramId(BlkFxParam::FFT_LEN))->load(),
+                               capped);
+  if (len <= 0)
+    return 0.0f;
+
+  const auto s = text.trim();
+  const double pct = s.getDoubleValue();
+  const float wanted = (float)((s.contains("%") || pct > 1.0 ? pct * 0.01 : pct));
+
+  // getBlkShiftFwd interpolates the step from (len - 16) down to len * 0.15.
+  const float lo = (float)len - 16.0f;
+  const float hi = (float)len * 0.15f;
+  const float fwd = (1.0f - wanted) * (float)len;
+  return juce::jlimit(0.0f, 1.0f, (fwd - lo) / (hi - lo));
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout DtBlkFxAudioProcessor::createParameterLayout()
 {
+  using namespace BlkFxParam;
   juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
-  for (int i = 0; i < BlkFxParam::TOTAL_NUM; ++i) {
-    BlkFxParam::SplitParamNum p(i);
-    juce::String name;
-    float defaultValue = 0.0f;
-    if (p.glob_param >= 0) {
-      switch (p.glob_param) {
-        case BlkFxParam::MIX_BACK:
-          name = "Mix Back";
-          defaultValue = 0.0f;
-          break;
-        case BlkFxParam::DELAY:
-          name = "Delay";
-          defaultValue = 0.0f;
-          break;
-        case BlkFxParam::FFT_LEN:
-          name = "FFT Length";
-          defaultValue = 0.5f;
-          break;
-        case BlkFxParam::OVERLAP:
-          name = "Overlap";
-          defaultValue = 0.5f;
-          break;
-        default:
-          name = "Global " + juce::String(p.glob_param);
-          break;
-      }
-    }
-    else {
-      juce::String fxName = "FX " + juce::String(p.fx_set + 1) + " ";
-      switch (p.fx_param) {
-        case BlkFxParam::FX_FREQ_A:
-          name = fxName + "Freq A";
-          break;
-        case BlkFxParam::FX_FREQ_B:
-          name = fxName + "Freq B";
-          break;
-        case BlkFxParam::FX_AMP:
-          name = fxName + "Amp";
-          defaultValue = 0.6f; // 0dB
-          break;
-        case BlkFxParam::FX_TYPE:
-          name = fxName + "Type";
-          break;
-        case BlkFxParam::FX_VAL:
-          name = fxName + "Value";
-          break;
-        default:
-          name = fxName + "Param " + juce::String(p.fx_param);
-          break;
-      }
-    }
+  const juce::NormalisableRange<float> unit(0.0f, 1.0f);
 
+  auto addFloat = [&layout, &unit](const juce::String& id,
+                                   const juce::String& name,
+                                   float defaultValue,
+                                   std::function<juce::String(float, int)> toText,
+                                   std::function<float(const juce::String&)> fromText) {
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        "param_" + juce::String(i), name, 0.0f, 1.0f, defaultValue));
+        id,
+        name,
+        unit,
+        defaultValue,
+        juce::AudioParameterFloatAttributes()
+            .withStringFromValueFunction(std::move(toText))
+            .withValueFromStringFunction(std::move(fromText))));
+  };
+
+  auto addBool = [&layout](const juce::String& id,
+                           const juce::String& name,
+                           bool defaultValue,
+                           const char* trueText,
+                           const char* falseText) {
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        id,
+        name,
+        defaultValue,
+        juce::AudioParameterBoolAttributes()
+            .withStringFromValueFunction(
+                [trueText, falseText](bool v, int) { return juce::String(v ? trueText : falseText); })
+            .withValueFromStringFunction([trueText](const juce::String& t) {
+              const auto s = t.trim();
+              return s.equalsIgnoreCase(trueText) || s.equalsIgnoreCase("on") ||
+                     s.equalsIgnoreCase("yes") || s.equalsIgnoreCase("true") ||
+                     s.getFloatValue() >= 0.5f;
+            })));
+  };
+
+  // --- globals ---------------------------------------------------------------
+  // Names follow docs/MANUAL.md so the host list reads like the manual.
+
+  // MIX_BACK, unpacked. The engine's own text prints the mode and the amount
+  // together ("match  33%"); split across two host parameters each half prints
+  // its own part, which is what the original GUI's two controls did.
+  addFloat(
+      mixBackId,
+      "MixBack",
+      getMixBackFrac(0.0f),
+      [](float v, int) { return juce::String(juce::roundToInt(v * 100.0f)) + "%"; },
+      [](const juce::String& t) { return parseFraction(t); });
+
+  addBool(powerId, "Power", getPwrMatch(0.0f) > 0.5f, "match", "filter");
+
+  addFloat(
+      paramId(DELAY),
+      "Delay",
+      0.0f,
+      [this](float v, int) { return coreParamText(DELAY, v); },
+      [](const juce::String& t) {
+        const auto s = t.trim().toLowerCase();
+        if (s.contains("beat"))
+          return (float)Delay::beats((float)s.getDoubleValue());
+        return (float)Delay::msec((float)(parseSeconds(s) * 1000.0));
+      });
+
+  addFloat(
+      paramId(FFT_LEN),
+      "BlkLen",
+      0.5f,
+      [this](float v, int) { return blkLenText(v); },
+      [this](const juce::String& t) {
+        return fftLenParamForSeconds(parseSeconds(t), getSampleRate());
+      });
+
+  // OVERLAP, unpacked, same reasoning as MIX_BACK. The percentage the engine
+  // prints is the achieved overlap (it depends on the block length), while the
+  // parameter is the requested amount, so this one prints the request.
+  addFloat(
+      overlapId,
+      "Overlap",
+      getOverlapPart(0.5f),
+      [this](float v, int) { return overlapText(v); },
+      [this](const juce::String& t) { return overlapValueForText(t); });
+
+  addBool(syncId, "Sync", getBlkSync(0.5f), "on", "off");
+
+  // --- the eight effect sets -------------------------------------------------
+  for (int set = 0; set < NUM_FX_SETS; ++set) {
+    const juce::String prefix(set + 1);
+
+    auto addFx = [&](int fxParam,
+                     const juce::String& suffix,
+                     float defaultValue,
+                     std::function<float(const juce::String&)> fromText) {
+      const int index = paramOffs(set) + fxParam;
+      addFloat(
+          paramId(index),
+          prefix + ": " + suffix,
+          defaultValue,
+          [this, index](float v, int) { return coreParamText(index, v); },
+          std::move(fromText));
+    };
+
+    // Frequencies accept Hz ("440", "1.2kHz") or a note name ("c#4:-45").
+    // The original never wired note entry up -- NoteToHz has no call sites in
+    // dtblkfx_src -- but the notation is the plugin's own, so it is honoured.
+    auto parseFreq = [](const juce::String& t) {
+      float hz = noteTextToHz(t);
+      if (hz < 0.0f)
+        hz = (float)parseHz(t);
+      if (hz <= 0.0f)
+        return 0.0f;
+      return juce::jlimit(0.0f, 1.0f, HzToNoteOffs(hz) / noteSpan());
+    };
+
+    addFx(FX_FREQ_A, "FreqA", 0.0f, parseFreq);
+    addFx(FX_FREQ_B, "FreqB", 0.0f, parseFreq);
+
+    addFx(FX_AMP, "Amp", getAmpParam0dB(), [](const juce::String& t) {
+      const auto s = t.trim().toLowerCase();
+      if (s.contains("inf"))
+        return 0.0f;
+      // Effects with a mix-mode amp print a percentage below 0 dB, where the
+      // param is linear up to the 0 dB point.
+      if (s.contains("%"))
+        return juce::jlimit(0.0f, 1.0f, (float)(s.getDoubleValue() * 0.01) * getAmpParam0dB());
+      return getAmpParam((float)s.getDoubleValue());
+    });
+
+    // Left as a plain float, not an AudioParameterChoice: the effect is
+    // selected by (long)(param * 255) / 8, and a choice parameter would
+    // renormalise, so old automation and ported presets would pick a
+    // different effect.
+    addFx(FX_TYPE, "Type", 0.0f, [](const juce::String& t) {
+      const int idx = effectIndexForName(t);
+      return idx >= 0 ? getEffectTypeInv(idx) : juce::jlimit(0.0f, 1.0f, t.getFloatValue());
+    });
+
+    // Every effect gives FX_VAL its own meaning and its own text ("40% odd",
+    // "+12.00 notes", "above 25%", ...). Reading those back needs 31 bespoke
+    // parsers; until then the raw 0..1 value is accepted.
+    // See docs/FUTURE-ROADMAP.md.
+    addFx(FX_VAL, "Value", 0.0f, [](const juce::String& t) {
+      return juce::jlimit(0.0f, 1.0f, t.trim().getFloatValue());
+    });
   }
 
   // Limiter Parameters
@@ -141,16 +449,46 @@ juce::AudioProcessorValueTreeState::ParameterLayout DtBlkFxAudioProcessor::creat
 
 void DtBlkFxAudioProcessor::parameterChanged(const juce::String& parameterID, float newValue)
 {
-  if (core) {
-    if (parameterID.startsWith("param_")) {
-      int index = parameterID.substring(6).getIntValue();
-      core->setParameter(index, newValue);
-    }
+  if (core == nullptr)
+    return;
+
+  if (parameterID.startsWith("param_")) {
+    const int index = parameterID.substring(6).getIntValue();
+    core->setParameter(index, newValue);
+    // BlkLen and Overlap both print something derived from the block length,
+    // which DELAY caps and FFT_LEN requests.
+    if (index == BlkFxParam::DELAY || index == BlkFxParam::FFT_LEN)
+      displayRefresher.triggerAsyncUpdate();
+    // FX_TYPE decides what the other four params in its set mean, including
+    // whether they print "-" at all.
+    else if (index >= BlkFxParam::NUM_GLOBAL_PARAMS &&
+             (index - BlkFxParam::NUM_GLOBAL_PARAMS) % BlkFxParam::NUM_FX_PARAMS ==
+                 BlkFxParam::FX_TYPE)
+      displayRefresher.triggerAsyncUpdate();
+    return;
+  }
+
+  // The two packed globals: recombine the pair into the single float the
+  // engine expects. Only ever one writer per engine value.
+  if (parameterID == mixBackId || parameterID == powerId) {
+    const float frac =
+        parameterID == mixBackId ? newValue : apvts.getRawParameterValue(mixBackId)->load();
+    const bool match = parameterID == powerId ? newValue >= 0.5f
+                                              : apvts.getRawParameterValue(powerId)->load() >= 0.5f;
+    core->setParameter(BlkFxParam::MIX_BACK, BlkFxParam::getMixbackParam(frac, match));
+  }
+  else if (parameterID == overlapId || parameterID == syncId) {
+    const float part =
+        parameterID == overlapId ? newValue : apvts.getRawParameterValue(overlapId)->load();
+    const bool sync = parameterID == syncId ? newValue >= 0.5f
+                                            : apvts.getRawParameterValue(syncId)->load() >= 0.5f;
+    core->setParameter(BlkFxParam::OVERLAP, BlkFxParam::getOverlapParam(part, sync));
   }
 }
 
 DtBlkFxAudioProcessor::~DtBlkFxAudioProcessor()
 {
+  displayRefresher.cancelPendingUpdate();
   if (core) {
     delete core;
     core = nullptr;
@@ -238,6 +576,43 @@ void DtBlkFxAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock
   limiter.reset();
 }
 
+void DtBlkFxAudioProcessor::updateTimeInfo()
+{
+  // The engine asks the "host" for tempo through the VST2 stub, which hands
+  // back one struct that nobody was ever filling in. Everything tempo-related
+  // -- delay in beats, block sync, the parameter interpolation window -- reads
+  // from here, so it all sat on whatever the default was.
+  auto& ti = core->timeInfo;
+  ti.sampleRate = getSampleRate();
+  ti.flags = 0;
+
+  auto* playHead = getPlayHead();
+  if (playHead == nullptr)
+    return;
+
+  const auto pos = playHead->getPosition();
+  if (!pos.hasValue())
+    return;
+
+  if (const auto bpm = pos->getBpm()) {
+    ti.tempo = *bpm;
+    ti.flags |= kVstTempoValid;
+  }
+  if (const auto ppq = pos->getPpqPosition()) {
+    ti.ppqPos = *ppq;
+    ti.flags |= kVstPpqPosValid;
+  }
+  if (const auto sig = pos->getTimeSignature()) {
+    ti.timeSigNumerator = sig->numerator;
+    ti.timeSigDenominator = sig->denominator;
+    ti.flags |= kVstTimeSigValid;
+  }
+  if (const auto samples = pos->getTimeInSamples())
+    ti.samplePos = (double)*samples;
+  if (pos->getIsPlaying())
+    ti.flags |= kVstTransportPlaying;
+}
+
 void DtBlkFxAudioProcessor::releaseResources()
 {
   if (core) {
@@ -288,6 +663,8 @@ void DtBlkFxAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     buffer.clear(i, 0, buffer.getNumSamples());
 
   if (core) {
+    updateTimeInfo();
+
     // getArrayOfWritePointers() returns float* const* as of JUCE 7 (the
     // pointed-to samples are still mutable, only the array of pointers is
     // const); processReplacing predates that and wants float**.

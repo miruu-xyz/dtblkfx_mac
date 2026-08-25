@@ -24,6 +24,9 @@ public:
 
   bool isLocked(int index) const;
 
+  // Re-read every slider's text from its parameter.
+  void refreshTexts();
+
 private:
   juce::AudioProcessorValueTreeState& apvts;
 
@@ -53,6 +56,9 @@ public:
   void resized() override;
 
   bool isLocked() const { return lockButton.getToggleState(); }
+
+  // Re-read every slider's text from its parameter.
+  void refreshTexts();
 
   juce::ToggleButton lockButton;
   juce::ToggleButton onOffButton;
@@ -143,6 +149,7 @@ private:
 
   // Interpolation State
   bool isInterpolating = false;
+  int textRefreshTick = 0;
   double interpolationTime = 0.0;
   double interpolationDuration = 0.0;
   std::map<juce::String, float> startValues;
