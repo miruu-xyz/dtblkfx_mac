@@ -66,15 +66,19 @@ Adding an effect or a parameter means adding a case in
 
 Things in this codebase that have already cost time, or are waiting to:
 
-- **The engine reads uninitialised memory at startup.** `_chan[].x0`, `x1` and
-  `x2` come from `fftwf_malloc`, which does not zero, and `DtBlkFx::init()`
-  clears only `x3` despite its "clear out all buffers" comment. The first FFT
+- **The engine used to read uninitialised memory at startup — fixed in Phase
+  3, watch for regressions.** `_chan[].x0`, `x1` and `x2` come from
+  `fftwf_malloc`, which does not zero, and `DtBlkFx::init()` clears only `x3`
+  despite its "clear out all buffers" comment. Left alone, the first FFT
   window of an instance's life transforms whatever the allocator handed over,
-  which is where the NaN bursts come from. **The harness running one case per
-  process does not work around this — it hides it**, because a fresh process
-  gets zeroed pages from the kernel and a DAW does not. `--in-process` shows the
-  real behaviour. Not yet fixed — Phase 3, which has the measurements and
-  the scoped fix.
+  which is where the NaN bursts came from. The constructor now clears those
+  three buffers once, right after the `resize()` calls, in
+  `src/core/DtBlkFx.cpp` — do not remove that clear or move it into
+  `init()`/`suspend()` (see `docs/ROADMAP.md`, Phase 3, for why those are the
+  wrong places). **The harness running one case per process does not exercise
+  this at all — it hides it**, because a fresh process gets zeroed pages from
+  the kernel and a DAW does not; `--in-process --repeat` is what actually
+  proves it, via the fingerprint hash added in Phase 2.1.
 - **`g_rand_i` is shared by every instance and must stay that way.** A single
   process-global PRBS in `FxRun1_0.cpp` randomises phase in Smear. It is why two
   Smear instances never sound the same, it is original behaviour, and it is the
