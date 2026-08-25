@@ -43,6 +43,40 @@ last one became Phase 3.
 
 ## Planned
 
+### Phase 2.1 — exact comparison for the stability check
+
+**Small, and it belongs before Phase 3.** The fingerprint compares with a
+tolerance — 0.05 dB on levels and bands, 0.002 on correlation — sized to absorb
+the arm64/x86_64 slice difference and FFTW planner noise. That is the right
+tolerance for checking a render against a baseline committed from another
+machine. It is the wrong one for `--repeat`, which renders the same case twice
+from the same binary on the same machine: there the only correct answer is
+*bit-identical*, and anything the tolerance swallows is exactly the residual
+non-determinism Phase 3 exists to remove.
+
+As it stands, Phase 3's completion test — "the full sweep is reproducible with
+`--in-process`" — is defined by a comparison that cannot see a difference
+smaller than 0.05 dB in an octave-wide band. The loud failure, a burst of NaNs,
+is unmissable either way. The one that would let the phase be declared done too
+early is a small state leak that biases the output slightly and stays under the
+threshold.
+
+**The change.** Add a hash of the raw output samples to the fingerprint (FNV or
+CRC over the float data, both channels) and compare it exactly on the
+same-machine paths: `--repeat`, and an `--in-process` run against an
+`--in-process` reference. `--check` against the committed baseline should print
+a hash difference but not fail on it — a different slice legitimately produces
+different bits. A hash mismatch with every tolerant metric passing is precisely
+the signal Phase 3 wants and cannot currently get.
+
+One column in the baseline file, one comparison path, no new analysis.
+
+Note what a hash does *not* solve. It is the right tool when the output is
+expected to come back identical, and useless the moment the bits are
+legitimately allowed to move — recompiling the core against a different SDK can
+change the last bits without changing anything anyone can hear. That case is
+Phase 4, and it needs the other half of the work. See there.
+
 ### Phase 3 — engine stability
 
 **The problem.** Two `DtBlkFx` instances in one process do not produce the same
@@ -83,6 +117,48 @@ full-Xcode requirement), building against a current macOS SDK, and modern
 parameter and bus APIs that Phases 5 and 7 both want. Pulled forward from the
 back of the roadmap because those two phases build on top of it — better to
 land the upgrade once than to build against the old APIs and redo the work.
+
+**The harness cannot see most of this phase, and can be fooled by the rest.**
+Two separate problems, and the second one is work that has to happen first.
+
+*Not covered at all.* `dtblkfx_render` drives the core directly, with no JUCE in
+the process. Nothing in `src/DtBlkFxProcessor.*` is exercised, so the JUCE-side
+work — new parameter and bus APIs — gets no regression check from
+`check_audio.sh` whatsoever. A green harness says the core still behaves; it
+says nothing about the wrapper. That half is verified by loading the plugin in a
+host.
+
+*Covered, but weakly.* Rebuilding `src/core/` against a current SDK and a newer
+toolchain can change floating-point codegen, so the audio is allowed to differ
+in its last bits while sounding identical. The Phase 2.1 hash is advisory by
+design for exactly this reason, which leaves the tolerant fingerprint as the
+only evidence — and the tolerant fingerprint is thin. `analyseBands` reduces the
+whole 65536-sample render to eight log-spaced magnitude bands from a single FFT:
+phase discarded, no time axis. That is a good detector for what it was built to
+catch — a refactor that shifts levels, an effect that stops processing, a
+channel that collapses — and a poor one for window misalignment, an off-by-one
+in the hop or the bin reconstruction, pre-echo, or transient smear. Those
+redistribute energy in time, or across bins *within* a band, and can leave all
+eight band levels inside the 0.05 dB tolerance. The test signal already carries
+an impulse every 8192 samples for transient response, and the analysis throws
+that information away.
+
+**So scope the metrics first, as the opening task of the phase, and regenerate
+the baseline before the upgrade** — so the new toolchain is measured against a
+reference the current one produced:
+
+- **Time resolution.** Band energies per segment rather than for the whole
+  render. The signal is a sweep, so a per-segment breakdown doubles as a coarse
+  frequency check, and it localises a transient error to where it happened.
+- **Phase.** Something that moves when the overlap-add alignment moves —
+  cross-correlation lag against the dry input, or group delay in a few bands.
+  Per-bin phase is more baseline than it is worth.
+- **More bands.** Eight bands from 40 Hz to Nyquist is about an octave and a
+  quarter each, wide enough to hide a birdie or a shifted resonance.
+
+The same requirement applies to any later change of the same shape — vectorising
+the core, changing the float flags, another compiler or SDK move. Bits move,
+perception must not, and today's fingerprint cannot tell those two apart.
 
 ### Phase 5 — parameter semantics and value display
 
