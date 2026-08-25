@@ -15,10 +15,23 @@ It works by processing audio in the frequency domain, allowing for unique effect
 - **Stereo Processing**: True stereo operation for all effects.
 - **Ad-hoc Signed**: Ready for local development and use in DAWs like Ableton Live.
 
+## Goal
+
+Get DtBlkFx into a modern, reliably running, nice-to-use state on macOS: a
+universal VST3 (and eventually AU) that sounds exactly like the original 2003
+plugin, with a GUI and parameter display worth using in 2026. The DSP engine
+in `src/core/` is the asset — it stays behaviourally frozen; everything else
+around it is fair game.
+
 ## About this fork
 
 This fork continues [haiori's macOS port](https://github.com/hai0ri/dtblkfx_mac)
-with a reworked build and a safety net around the twenty-year-old DSP engine:
+with a reworked build and a safety net around the twenty-year-old DSP engine.
+**Heads up: the code in this fork is AI-assisted ("vibe coded") — written and
+reviewed with Claude rather than by hand line-by-line.** That is offset by an
+audio regression harness that gates every change touching the engine (below),
+and a written plan (`docs/ROADMAP.md`) scoping each change before it lands, but
+it is worth knowing going in.
 
 - **One universal build.** `arm64` and `x86_64` in a single CMake invocation, so
   the plugin runs natively and under Rosetta. vcpkg is gone; FFTW is built from
@@ -26,6 +39,11 @@ with a reworked build and a safety net around the twenty-year-old DSP engine:
 - **An offline audio regression harness.** `./tools/check_audio.sh` renders a
   fixed signal through all 31 effect types and diffs the result against checked-in
   fingerprints, so a refactor cannot quietly change how the plugin sounds.
+- **The engine's startup NaN bug has been root-caused.** `_chan[].x0/x1/x2` come
+  from `fftwf_malloc`, which doesn't zero, so a recycled-memory instance (i.e.
+  any instance loaded into a DAW that's been running a while) can transform
+  garbage on its first FFT window. The fix is scoped and verified but not yet
+  applied — see Phase 3 in `docs/ROADMAP.md`.
 - **Built as `DtBlkFx Dev`** with its own plugin code, so it can be installed
   alongside an existing `DtBlkFx_GUI` build and A/B'd in the same session.
 - **The output limiter defaults to off.** It is a post-port addition rather than
@@ -33,7 +51,9 @@ with a reworked build and a safety net around the twenty-year-old DSP engine:
 
 Start with [`BUILDING.md`](BUILDING.md) to build it,
 [`CLAUDE.md`](CLAUDE.md) for how the code is laid out and what to watch out for
-in the engine, and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is planned.
+in the engine, and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is planned —
+GUI rework, real parameter units, factory presets, and a true stereo sidechain
+are all scoped there but not yet built.
 
 ## Installation
 
@@ -97,3 +117,4 @@ This project is licensed under the GNU General Public License v2.0 (or later). S
 ## Credits
 - **Original Author**: Darrell Tam
 - **macOS/JUCE Port**: haiori
+- **Modernization / UX rework**: miruu-xyz
