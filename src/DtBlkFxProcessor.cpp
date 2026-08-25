@@ -130,7 +130,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout DtBlkFxAudioProcessor::creat
       "Limiter Release",
       juce::NormalisableRange<float>(0.1f, 1000.0f, 0.1f, 0.5f),
       50.0f));
-  layout.add(std::make_unique<juce::AudioParameterBool>(limiterEnabledId, "Limiter Enabled", true));
+  // Default OFF. The limiter is a post-port addition, not part of the original
+  // plugin, and it has not been reviewed or tuned yet — off is the behaviour
+  // that matches DtBlkFx as people know it. See docs/ROADMAP.md, Phase 9.
+  layout.add(
+      std::make_unique<juce::AudioParameterBool>(limiterEnabledId, "Limiter Enabled", false));
 
   return layout;
 }

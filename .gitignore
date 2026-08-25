@@ -10,7 +10,6 @@ CMakeFiles/
 cmake_install.cmake
 install_manifest.txt
 *.cmake
-!modules/vcpkg/scripts/buildsystems/vcpkg.cmake
 
 # JUCE
 JuceLibraryCode/
@@ -30,3 +29,7 @@ JuceLibraryCode/
 
 # Logs
 *.log
+
+# Vendored universal FFTW — rebuild with tools/build_fftw_universal.sh
+/third_party/fftw-universal/
+/build/
