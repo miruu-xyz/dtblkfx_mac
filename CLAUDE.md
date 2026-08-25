@@ -66,11 +66,20 @@ Adding an effect or a parameter means adding a case in
 
 Things in this codebase that have already cost time, or are waiting to:
 
-- **State leaks between engine instances.** Two `DtBlkFx` objects in one process
-  do not render the same audio, and a sweep occasionally produces tens of
-  thousands of NaN samples. This is why the harness runs one case per process
-  (`--in-process` shows the bug). It is the leading suspect for the intermittent
-  misbehaviour people have reported in hosts. Not yet fixed — Phase 3.
+- **The engine reads uninitialised memory at startup.** `_chan[].x0`, `x1` and
+  `x2` come from `fftwf_malloc`, which does not zero, and `DtBlkFx::init()`
+  clears only `x3` despite its "clear out all buffers" comment. The first FFT
+  window of an instance's life transforms whatever the allocator handed over,
+  which is where the NaN bursts come from. **The harness running one case per
+  process does not work around this — it hides it**, because a fresh process
+  gets zeroed pages from the kernel and a DAW does not. `--in-process` shows the
+  real behaviour. Not yet fixed — Phase 3, which has the measurements and
+  the scoped fix.
+- **`g_rand_i` is shared by every instance and must stay that way.** A single
+  process-global PRBS in `FxRun1_0.cpp` randomises phase in Smear. It is why two
+  Smear instances never sound the same, it is original behaviour, and it is the
+  one thing in the engine that is *supposed* to be non-deterministic. Do not
+  "fix" it; seed it from the test side if a test needs reproducibility.
 - **`unsigned long` is 32-bit on Windows and 64-bit here.** `misc_stuff.h`
   typedefs `uint32` to `unsigned long`, and `LittleEndianMemStr::put32/get32`
   assume four bytes. Anything touching chunk serialisation needs checking

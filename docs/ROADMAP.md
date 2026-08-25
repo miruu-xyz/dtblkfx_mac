@@ -71,6 +71,10 @@ the signal Phase 3 wants and cannot currently get.
 
 One column in the baseline file, one comparison path, no new analysis.
 
+One case will not comply: `fx02.Smear` is genuinely non-deterministic by design
+and must stay that way. Seed it from the harness rather than exempting it — see
+Phase 3.
+
 Note what a hash does *not* solve. It is the right tool when the output is
 expected to come back identical, and useless the moment the bits are
 legitimately allowed to move — recompiling the core against a different SDK can
@@ -79,36 +83,94 @@ Phase 4, and it needs the other half of the work. See there.
 
 ### Phase 3 — engine stability
 
-**The problem.** Two `DtBlkFx` instances in one process do not produce the same
-audio. Rendering the full sweep twice from the same binary with the same input
-gives different numbers each time, and occasionally bursts of tens of thousands
-of NaN samples appear in effects that were clean on the previous run. Rendering
-a single case in a fresh process is reproducible to the bit, which is why the
-harness spawns one process per case.
+**Root cause found (2026-08-25).** Not a state leak between instances, and not
+the effect singletons in `g_fft_fx_table`. `DtBlkFx` allocates `_chan[].x0`,
+`x1` and `x2` with `ScopeFFTWfMalloc` — `fftwf_malloc`, which does not zero
+(`src/core/DtBlkFx.cpp`, the `resize` block in the constructor).
+`DtBlkFx::init()` is captioned *"clear out all buffers"* but clears only `x3`,
+the output FIFO, and `resume()` never calls it. So the first FFT window of an
+instance's life transforms whatever the allocator happened to hand over.
 
-Reproduce it with:
+The evidence:
 
-```bash
-./build/tools/dtblkfx_render --write /tmp/a.txt --in-process
-./build/tools/dtblkfx_render --write /tmp/b.txt --in-process
-diff /tmp/a.txt /tmp/b.txt
-```
+- Pre-fill the heap with `0xFF` — a NaN bit pattern read as `float` — before
+  constructing, and the engine emits **1024 NaN samples**: one block on both
+  channels, samples 100–611, the first 14 ms of that instance's output.
+- Rendering the sweep four times in a single process, **46 of 71** cases differ
+  run to run, with 6,621–59,589 NaN samples per sweep landing in a different
+  set of effects each time.
+- A fresh process is reproducible only because the kernel hands out new pages
+  already zeroed. **Per-case isolation is therefore a clean room, not a fix.** A
+  DAW is the opposite of a fresh process: Ableton has been allocating and
+  freeing since the session opened, so every instance loaded into it gets
+  recycled memory. This is a live defect in the plugin, not an artefact of the
+  harness.
 
-**Why it matters.** This is the best current explanation for the intermittent
-misbehaviour people have reported in hosts — silence, garbage, effects that work
-until they don't. A host holding several instances, or reopening one, is exactly
-the situation the harness reproduces. It is a better suspect than the limiter
-ever was.
+**Why it is worth fixing: it is the one failure mode that kills a channel.** A
+NaN entering the output does not stay a blip — it feeds back through the
+overlap-add buffers, Live mutes the track, and it propagates downstream. That
+is the whole justification for this phase. Everything else the engine does
+oddly is the engine being itself.
 
-**Where to look.** Uninitialised buffers in the engine's per-instance state
-(`_chan[].x1` / `x2` and friends), and shared mutable globals in `FxRun1_0.cpp`
-— the effect objects in `g_fft_fx_table` are file-scope singletons shared by
-every instance, and several of them carry state.
+**The change.** Clear those three buffers once, in the constructor, immediately
+after the `resize` calls. That is the entire fix. Do not extend it further:
 
-**How to verify.** `--repeat <n>` renders one case repeatedly in a single
-process and reports any variation. The phase is done when the full sweep is
-reproducible with `--in-process`, at which point the per-process isolation
-becomes an optimisation rather than a requirement.
+- **Not in `init()` / `suspend()`.** After the constructor clear, `x0` holds old
+  audio rather than uninitialised bytes, so the read window walking over the
+  not-yet-rewritten tail on transport restart produces a stale-audio blip, never
+  a NaN. No dead-channel risk, so no reason to change the behaviour.
+- **No NaN guard on the output block.** It would cost on the audio thread every
+  block, and it would mask faults instead of surfacing them. With the root cause
+  gone there is nothing for it to catch.
+
+**Cost, measured, not assumed.** 4.54 MB to clear (`x0` is 1.65 MB per channel,
+`x1` and `x2` about 315 KB each): **42 µs**, against 85 µs to construct an
+instance as it stands today. One time, at plugin load, on the message thread.
+Zero on the audio thread. Fresh pages are being zeroed by the kernel on first
+touch anyway — the memset only really costs anything in the recycled case,
+which is precisely the case being fixed.
+
+**It has already been verified to change nothing audible.** With the clear
+applied as a throwaway patch: `./tools/check_audio.sh` reproduces all **71**
+committed fingerprints; three consecutive `--in-process` sweeps become
+bit-identical; and 70 of 71 cases match the isolated baseline. The sound does
+not move. The fix only makes every process behave like a freshly launched one —
+which is the behaviour the baseline was captured from and the beta has been
+A/B'd against all along.
+
+**What must survive this phase.** The 71st case, `fx02.Smear.hi`, still varies
+in-process after the fix, and that is correct. `g_rand_i` (`FxRun1_0.cpp`) is a
+single process-global PRBS that randomises phase in Smear, shared by every
+instance and never reseeded, so two Smear instances in a session never repeat
+and never correlate. That is Darrell's own design and part of what the plugin
+sounds like. **Leave it alone**, and leave a comment saying why, so it does not
+get "fixed" later.
+
+For the exact in-process stability check in Phase 2.1, seed it from the *test
+side* instead: `g_rand_i` is a non-static global, so the harness can declare
+`extern long g_rand_i;` and set it to 1 before each case. Confirmed to make
+Smear bit-reproducible across renders in one process without touching engine
+behaviour.
+
+**Already investigated, no work needed.** Silent input does *not* produce NaN,
+despite the effects power-matching by dividing by input power. `MatchPwr`
+(`src/core/fftw_support.h`) returns 0 when the target power is `<= 0`, only
+divides when the current power is `> 0`, and clamps the result at both ends.
+Checked empirically across all 31 effects × three amp settings × digital
+silence, denormal `1e-38` and −140 dBFS: clean everywhere. Recorded here so it
+does not get re-investigated.
+
+**Done when.** Three `--in-process` sweeps agree exactly (Smear excepted, or
+with the harness-side seed in place) and report zero NaN, `check_audio.sh` still
+passes 71/71, and the plugin has been loaded in Live for a listen. At that point
+per-process isolation in the harness becomes an optimisation rather than a
+requirement — but the in-process stability check should stay, and should stay
+wired into the guardrail, because it is the only test that models a host.
+
+**Left open.** The NaN window was confirmed at instance startup only; nothing
+proves some other path does not read unwritten memory later. The
+`suspend()`/`resume()` stale-audio blip above is reasoned, not measured. Both
+are worth a look while in this code, neither blocks the fix.
 
 ### Phase 4 — JUCE upgrade
 
