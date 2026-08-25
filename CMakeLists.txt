@@ -188,6 +188,21 @@ if(TARGET DtBlkFx_VST3)
     COMMENT "Signing and installing DtBlkFx Dev.vst3")
 endif()
 
+# ── Parameter text check ──────────────────────────────────────────────────────
+# Phase 5's counterpart to the audio harness: check_audio.sh drives the engine
+# directly and never builds a JUCE parameter, so it is blind to everything the
+# host actually reads. This links the plugin's shared code and exercises it.
+add_executable(dtblkfx_paramtext tests/param_text_test.cpp)
+target_link_libraries(dtblkfx_paramtext PRIVATE
+    DtBlkFx
+    dtblkfx_core
+    juce::juce_audio_utils
+    juce::juce_dsp
+    juce::juce_gui_extra
+    juce::juce_recommended_config_flags)
+target_include_directories(dtblkfx_paramtext PRIVATE src)
+target_compile_features(dtblkfx_paramtext PRIVATE cxx_std_17)
+
 # ── Offline render / regression harness ───────────────────────────────────────
 # See CLAUDE.md and docs/ROADMAP.md. Host-free, so it builds and runs fast.
 if(DTBLKFX_BUILD_TOOLS)

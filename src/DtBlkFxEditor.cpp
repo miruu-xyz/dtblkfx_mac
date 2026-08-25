@@ -73,25 +73,26 @@ HeaderComponent::HeaderComponent(juce::AudioProcessorValueTreeState& apvts)
   setupLock(fftLock);
   setupLock(overlapLock);
 
-  // Register listener
-  apvts.addParameterListener("param_0", this); // Mix
-  apvts.addParameterListener("param_1", this); // Delay
-  apvts.addParameterListener("param_2", this); // FFT Len
-  apvts.addParameterListener("param_3", this); // Overlap
-
-  // Initial update
-  parameterChanged("param_0", *apvts.getRawParameterValue("param_0"));
-  parameterChanged("param_1", *apvts.getRawParameterValue("param_1"));
-  parameterChanged("param_2", *apvts.getRawParameterValue("param_2"));
-  parameterChanged("param_3", *apvts.getRawParameterValue("param_3"));
+  // Register listener. MixBack and Overlap are no longer packed params -- see
+  // DtBlkFxProcessor.h -- so the header talks to their halves directly.
+  for (auto* id : {DtBlkFxAudioProcessor::mixBackId,
+                   "param_1", // Delay
+                   "param_2", // BlkLen
+                   DtBlkFxAudioProcessor::overlapId,
+                   DtBlkFxAudioProcessor::syncId}) {
+    apvts.addParameterListener(id, this);
+    parameterChanged(id, *apvts.getRawParameterValue(id));
+  }
 }
 
 HeaderComponent::~HeaderComponent()
 {
-  apvts.removeParameterListener("param_0", this);
-  apvts.removeParameterListener("param_1", this);
-  apvts.removeParameterListener("param_2", this);
-  apvts.removeParameterListener("param_3", this);
+  for (auto* id : {DtBlkFxAudioProcessor::mixBackId,
+                   "param_1",
+                   "param_2",
+                   DtBlkFxAudioProcessor::overlapId,
+                   DtBlkFxAudioProcessor::syncId})
+    apvts.removeParameterListener(id, this);
   setLookAndFeel(nullptr);
 }
 
@@ -113,13 +114,9 @@ bool HeaderComponent::isLocked(int index) const
 
 void HeaderComponent::parameterChanged(const juce::String& parameterID, float newValue)
 {
-  if (parameterID == "param_0") // Mix
-  {
-    bool pwrMatch = BlkFxParam::getPwrMatch(newValue) > 0.5f;
-    float mixFrac = BlkFxParam::getMixBackFrac(newValue);
-
-    juce::MessageManager::callAsync([this, pwrMatch, mixFrac] {
-      mixSlider.setValue(1.0f - mixFrac, juce::dontSendNotification);
+  if (parameterID == DtBlkFxAudioProcessor::mixBackId) {
+    juce::MessageManager::callAsync([this, newValue] {
+      mixSlider.setValue(1.0f - newValue, juce::dontSendNotification);
     });
   }
   else if (parameterID == "param_1") // Delay
@@ -133,26 +130,21 @@ void HeaderComponent::parameterChanged(const juce::String& parameterID, float ne
     juce::MessageManager::callAsync(
         [this, newValue] { fftLenSlider.setValue(newValue, juce::dontSendNotification); });
   }
-  else if (parameterID == "param_3") // Overlap
-  {
-    float overlapPart = BlkFxParam::getOverlapPart(newValue);
-    bool sync = BlkFxParam::getBlkSync(newValue);
-
-    juce::MessageManager::callAsync([this, overlapPart, sync] {
-      overlapSlider.setValue(overlapPart * 10.0f, juce::dontSendNotification);
-      syncButton.setToggleState(sync, juce::dontSendNotification);
+  else if (parameterID == DtBlkFxAudioProcessor::overlapId) {
+    juce::MessageManager::callAsync(
+        [this, newValue] { overlapSlider.setValue(newValue * 10.0f, juce::dontSendNotification); });
+  }
+  else if (parameterID == DtBlkFxAudioProcessor::syncId) {
+    juce::MessageManager::callAsync([this, newValue] {
+      syncButton.setToggleState(newValue >= 0.5f, juce::dontSendNotification);
     });
   }
 }
 
 void HeaderComponent::updateMixParam()
 {
-  float mixFrac = (float)mixSlider.getValue();
-  float newVal = BlkFxParam::getMixbackParam(1.0f - mixFrac, false);
-
-  auto* param = apvts.getParameter("param_0");
-  if (param)
-    param->setValueNotifyingHost(newVal);
+  if (auto* param = apvts.getParameter(DtBlkFxAudioProcessor::mixBackId))
+    param->setValueNotifyingHost(1.0f - (float)mixSlider.getValue());
 }
 
 void HeaderComponent::updateDelayParam()
@@ -173,13 +165,10 @@ void HeaderComponent::updateFFTLenParam()
 
 void HeaderComponent::updateOverlapParam()
 {
-  float overlapPart = (float)overlapSlider.getValue() / 10.0f;
-  bool sync = syncButton.getToggleState();
-  float newVal = BlkFxParam::getOverlapParam(overlapPart, sync);
-
-  auto* param = apvts.getParameter("param_3");
-  if (param)
-    param->setValueNotifyingHost(newVal);
+  if (auto* param = apvts.getParameter(DtBlkFxAudioProcessor::overlapId))
+    param->setValueNotifyingHost((float)overlapSlider.getValue() / 10.0f);
+  if (auto* param = apvts.getParameter(DtBlkFxAudioProcessor::syncId))
+    param->setValueNotifyingHost(syncButton.getToggleState() ? 1.0f : 0.0f);
 }
 
 void HeaderComponent::paint(juce::Graphics& g)
@@ -676,11 +665,19 @@ void DtBlkFxEditor::startRandomization()
         continue;
       }
 
-      // Check locks for global parameters (0-3)
-      // Param IDs are "param_0", "param_1", etc.
-      // We can parse the ID or check index if available.
-      // Let's assume paramID format "param_X"
-      int paramIndex = param->paramID.fromFirstOccurrenceOf("param_", false, false).getIntValue();
+      // Locks are per global control / per FX row. The globals no longer all
+      // have a "param_<n>" id, so the unpacked halves map back by name.
+      int paramIndex = -1;
+      if (param->paramID == DtBlkFxAudioProcessor::mixBackId ||
+          param->paramID == DtBlkFxAudioProcessor::powerId)
+        paramIndex = 0;
+      else if (param->paramID == DtBlkFxAudioProcessor::overlapId ||
+               param->paramID == DtBlkFxAudioProcessor::syncId)
+        paramIndex = 3;
+      else if (param->paramID.startsWith("param_"))
+        paramIndex = param->paramID.fromFirstOccurrenceOf("param_", false, false).getIntValue();
+      else
+        continue;
 
       if (paramIndex < 4 && header.isLocked(paramIndex)) {
         continue; // Skip locked global params
@@ -777,27 +774,35 @@ void DtBlkFxEditor::loadFactoryPreset(int index)
   startValues.clear();
   targetValues.clear();
 
-  auto setParam = [&](int id, float val) {
-    juce::String paramID = "param_" + juce::String(id);
+  auto setById = [&](const juce::String& paramID, float val) {
     targetValues[paramID] = val;
     if (auto* p = audioProcessor.apvts.getParameter(paramID))
       startValues[paramID] = p->getValue();
+  };
+  auto setParam = [&](int id, float val) {
+    const auto paramID = DtBlkFxAudioProcessor::paramId(id);
+    if (paramID.isNotEmpty())
+      setById(paramID, val);
   };
 
   // Reset all first
   for (int i = 0; i < BlkFxParam::TOTAL_NUM; ++i) {
     setParam(i, 0.0f); // Default 0
   }
+  setById(DtBlkFxAudioProcessor::mixBackId, 0.0f);
+  setById(DtBlkFxAudioProcessor::powerId, 1.0f);
+  setById(DtBlkFxAudioProcessor::overlapId, 0.0f);
+  setById(DtBlkFxAudioProcessor::syncId, 0.0f);
 
   // Apply specific settings
-  if (index == 0) {    // Init
-    setParam(0, 0.0f); // Mix Dry
-    setParam(2, 0.5f); // FFT
-    setParam(3, 0.5f); // Overlap
+  if (index == 0) { // Init
+    setById(DtBlkFxAudioProcessor::mixBackId, 0.0f); // Mix Dry
+    setParam(2, 0.5f);                               // BlkLen
+    setById(DtBlkFxAudioProcessor::overlapId, 1.0f); // Overlap
   }
-  else if (index == 1) { // Vocoder-ish
-    setParam(0, 1.0f);   // Wet
-    setParam(2, 0.7f);   // FFT
+  else if (index == 1) {                             // Vocoder-ish
+    setById(DtBlkFxAudioProcessor::mixBackId, 1.0f); // Wet
+    setParam(2, 0.7f);                               // BlkLen
   }
 
   // Trigger interpolation (short)

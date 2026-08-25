@@ -161,19 +161,143 @@ compiled into the plugin, just not connected to anything:
 | Note name ⇄ Hz, both directions | `NoteFreq::HzToNote`, `NoteToHz` |
 | Frequency snapped to the real FFT bin | `DtBlkFx::guessRoundHz` |
 
-**Scope it before writing any code.** Per the plan: produce a document first
-that enumerates, for all 31 effect types, what each of the five FX parameters
-means, what it displays, whether it is used, and what its value presets are.
-Most of that can be generated mechanically by walking `g_fft_fx_table` and
-calling the functions above — a small addition to `tools/render/` could emit the
-whole table. Only once that exists is it clear what the GUI has to show.
+**Scoped first, per the plan.** `dtblkfx_render --params` walks every parameter
+and all 31 entries of `g_fft_fx_table`, calling the engine's own display
+functions, and emits `docs/PARAMETERS.md`. Every string in that file is what the
+engine actually prints; nothing in it is hand-written. Regenerate it rather than
+editing it.
 
-**Then wire it up.** The JUCE-side work is `stringFromValue` / `valueFromString`
-on the parameters, delegating to the core. Two things to watch: the core's
-display functions read live engine state (current effect type, current FFT
-length), so the text is context-dependent and cannot be a pure function of the
-parameter value; and they are called from the message thread while the engine
-runs on the audio thread.
+What scoping changed about the picture above:
+
+- **Note-name entry never shipped.** `NoteToHz` has zero call sites in
+  `dtblkfx_src/` — it is dead code in the original, not a feature that was lost.
+  Note *display* on the frequency readout was commented out too
+  (`// HzToNote(str, hz);`, `dtblkfx_src/FxCtrl.cpp`); notes survive only in the
+  spectrogram hover text. Wiring it up is a small addition, not a restoration.
+- **Two display paths disagree.** `DtBlkFx::getParameterDisplay` (host-facing)
+  bin-rounds frequency via `guessRoundHz` and prints amp mix as `33%`. The
+  original GUI (`FxCtrl.cpp` / `GlobalCtrl.cpp`) used raw Hz, `33.3 %`, and
+  appended ` *` to BlkLen when the FFT is longer than the delay — an asterisk the
+  manual documents.
+- **Context dependence is wider than "effect type and FFT length".**
+  `FX_VAL`/`FX_AMP`/`FrqA`/`FrqB` follow `FX_TYPE`; `FrqA`/`FrqB` also follow the
+  FFT length, which follows `FFT_LEN` *and* `DELAY`; `FFT_LEN` and `OVERLAP`
+  follow `DELAY`; `DELAY` follows host tempo and sample rate. At `DELAY = 0` the
+  whole `FFT_LEN` range collapses onto one block size and both it and `OVERLAP`
+  freeze, so `docs/PARAMETERS.md` is generated at `DELAY = 1 sec`.
+- **The display functions do not have to be called through
+  `getParameterDisplay`.** That one ignores any value you would pass it and reads
+  `_params.getInput(index)`, so using it from JUCE means mutating the engine to
+  ask a question. The two functions underneath —
+  `DtBlkFx::getParamDisplayGlobal(p, v, str)` and
+  `FxState1_0::getParamDisplay(p, v, str)` — both take the value as an argument
+  and are public. Calling those directly keeps `stringFromValue` read-only, which
+  also settles the audio-thread concern.
+- No `dispVal` override names its `FxState1_0*`, so FX_VAL text is a pure
+  function of (effect, value) and `NULL` is safe — the engine itself calls it
+  that way when it builds the preset menus.
+- Slots 9 and 10 of `g_fft_fx_table` are both `Off`.
+- Shift, HarmShift, HarmRepitch and Resample have *relative* value presets
+  ("Change by +N notes" offsets the current value). That is menu behaviour, so it
+  lands in Phase 6, not here.
+
+**Decisions taken at the end of scoping:**
+
+1. **Display convention: the core's, plus the asterisk.** Bin-rounded Hz and
+   `33%` from `getParamDisplayGlobal` / `FxState1_0::getParamDisplay`, but BlkLen
+   also gets the ` *` suffix when the delay is capping the block size, because
+   the manual documents it as a user-facing signal. Phase 6's GUI may still print
+   its own raw-Hz text — that split is what the original had.
+2. **`MIX_BACK` and `OVERLAP` are replaced, not kept.** The host sees
+   `Mix Back %`, `Power`, `Overlap %` and `Sync` as four separate automatable
+   parameters; the packed `param_0` and `param_3` stop existing at the host
+   boundary. The engine still gets one float each, recombined via
+   `BlkFxParam::getMixbackParam` and `getOverlapParam` — both verified to
+   round-trip exactly against `getMixBackFrac` / `getPwrMatch` and
+   `getOverlapPart` / `getBlkSync`. One writer per engine value, so no automation
+   fight. The cost is that a Live set which automated Mix Back or Overlap on
+   `DtBlkFx Dev` loses those lanes; the beta is a separate plugin code and is
+   untouched, and Phase 8 preset porting is unaffected since those store raw
+   values and get decoded into the pair on load.
+3. **`FX_TYPE` stays an `AudioParameterFloat`** with custom text rather than
+   becoming an `AudioParameterChoice`. A choice parameter renormalises, which
+   would make old automation and ported presets select different effects; the
+   `(long)(param * 255.0) / 8` mapping is what they encode.
+4. **`valueFromString` covers the globals, `FrqA`/`FrqB`, `FX_AMP` and
+   `FX_TYPE`.** Every inverse needed already exists — `getMixbackParam`,
+   `Delay::beats`/`::msec`, `getFFTLenParam`, `getOverlapParam`, `getAmpParam`,
+   `getEffectTypeInv`, and `HzToNoteOffs` for frequency — plus `NoteToHz` for
+   note-name entry (`c#4:-45`), which is worth wiring even though the original
+   never did. `FX_VAL` accepts a bare 0..1 number only; the 31 bespoke parsers
+   needed to invert `dispVal` are deferred to `docs/FUTURE-ROADMAP.md`.
+
+**Done.** `createParameterLayout` in `src/DtBlkFxProcessor.cpp` now builds every
+parameter with a `stringFromValue` / `valueFromString` pair, and the four
+unpacked globals replace the two packed ones. Parameter ids: `param_1`,
+`param_2` and `param_4`..`param_43` are unchanged so existing automation
+survives; `param_0` and `param_3` are gone, replaced by `mixBack` + `power` and
+`overlap` + `sync`. Host names follow `docs/MANUAL.md` (MixBack, Power, Delay,
+BlkLen, Overlap, Sync, and `<n>: FreqA` … one-based). `updateHostDisplay()` is
+coalesced through an `AsyncUpdater` and fired when `DELAY` or any `FX_TYPE`
+moves.
+
+**Two engine display functions ignore the value they are handed.** Scoping
+established that `getParamDisplayGlobal(p, v, str)` and
+`FxState1_0::getParamDisplay(p, v, str)` take the value as an argument; what it
+missed is that two of their branches then do not use it:
+
+- `FFT_LEN` calls `guessFFTLen()`, which reads the engine's own fft-len param.
+- `FX_TYPE` calls `getFxRun()`, which returns the effect the set is *currently*
+  on.
+
+For a VST2 host that only ever asks "what does the current value read as", both
+are correct. In a VST3 automation lane, where the host asks for text at
+arbitrary points, both print one constant across the whole range. Both are
+therefore rendered in the JUCE layer instead — `blkLenText()` redoes
+`guessFFTLen`'s arithmetic driven by the value, and `FX_TYPE` looks the name up
+directly via `GetFxRun1_0(getEffectType(v))`. Same tables, same formatting, same
+strings; the core is untouched. Everything else still goes through the engine.
+
+**One core change:** `NoteToHz` in `src/core/NoteFreq.cpp` passed `substr(colon_pos)`
+to `strtod`, leading with the `':'`, so it always parsed zero cents. It has no
+callers in the original source, which is why nobody noticed; decision 4 gives it
+one. Fixed to `substr(colon_pos + 1)`.
+
+**Verification.** `check_audio.sh` cannot see any of this — `dtblkfx_render`
+drives the core with no JUCE in the process — so it staying green proves only
+that the parameter work did not disturb the engine, which is exactly what it is
+for here. The counterpart is `tests/param_text_test.cpp`, built as
+`dtblkfx_paramtext`: it instantiates the real `AudioProcessor` and checks that
+every parameter's text survives a round trip back through `valueFromString`,
+that typed delay units and note names land where they should, that every effect
+is selectable by the name the plugin prints for it, and that the mixback and
+overlap packing is lossless.
+
+```bash
+cmake --build build --target dtblkfx_paramtext && ./build/dtblkfx_paramtext
+```
+
+Two things it deliberately does not round-trip. **Delay** prints the delay the
+engine will actually apply (`getDelaySamps` minus the reported latency), not the
+amount the parameter asks for, so text in and text out need not agree; the test
+checks that typed units and amounts are honoured instead. **BlkLen with the
+asterisk** prints the delay rather than a block length, and the delay is not one
+of the 34 available FFT sizes.
+
+**Overlap reads 0%..85%, not 0%..100%,** because that is where
+`getBlkShiftFwd`'s interpolation ends — the block step never falls below 15% of
+the block length. Both the engine (`getParamDisplayGlobal`) and the original GUI
+(`dtblkfx_src/GlobalCtrl.cpp:228`) display the achieved overlap rather than the
+request, so `overlapText` does the same, and `overlapValueForText` inverts it so
+typing `40%` gives 40%. That figure depends on the block length, so `FFT_LEN`
+joins `DELAY` and `FX_TYPE` in triggering `updateHostDisplay()`.
+
+`getOverlapParam` clamps its two halves to `0.499` / `0.501` so they cannot
+collide, which loses just under 0.2% of the request. That is the original's own
+arithmetic — `dtblkfx_src/GlobalCtrl.cpp:466` packs its overlap slider and sync
+toggle exactly this way — and it is below the rounding of the displayed
+percentage, so the split reaches the same 0% and 85% the packed parameter did.
+The test asserts that.
 
 This phase and Phase 6 are two halves of the same complaint and should probably
 be scoped together, but implemented in this order — the GUI cannot show what the

@@ -69,7 +69,10 @@ float /*freq hz*/ NoteToHz(string note)
   int colon_pos = note.find(":");
   if (colon_pos != -1) {
     // grab cents
-    cents = (float)strtod(note.substr(colon_pos).c_str(), /*endptr*/ NULL);
+    // (port) was substr(colon_pos), which handed strtod a leading ':' and
+    // always parsed 0 cents. NoteToHz has no callers in the original source,
+    // so this never showed up; Phase 5 wires it to text entry on FreqA/FreqB.
+    cents = (float)strtod(note.substr(colon_pos + 1).c_str(), /*endptr*/ NULL);
     // remove everything prior
     note.resize(colon_pos);
   }
