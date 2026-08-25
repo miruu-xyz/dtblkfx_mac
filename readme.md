@@ -15,39 +15,35 @@ It works by processing audio in the frequency domain, allowing for unique effect
 - **Stereo Processing**: True stereo operation for all effects.
 - **Ad-hoc Signed**: Ready for local development and use in DAWs like Ableton Live.
 
-## Goal
+---
 
-Get DtBlkFx into a modern, reliably running, nice-to-use state on macOS: a
-universal VST3 (and eventually AU) that sounds exactly like the original 2003
-plugin, with a GUI and parameter display worth using in 2026. The DSP engine
-in `src/core/` is the asset — it stays behaviourally frozen; everything else
-around it is fair game.
+## The Goal
+
+Update DtBlkFx to a modern and nice-to-use state on macOS: a universal 
+VST3 (and maybe AU in the future) that is as fun to use as the original 
+2003 plugin, with a more faithful adaptaion of the GUI and parameters, 
+which the original repo didn't reproduce.
+The original engine should stay as close to the original as possible,
+minor changes due to JUCE upgrades are to be expected.
 
 ## About this fork
 
-This fork continues [haiori's macOS port](https://github.com/hai0ri/dtblkfx_mac)
-with a reworked build and a safety net around the twenty-year-old DSP engine.
-**Heads up: the code in this fork is AI-assisted ("vibe coded") — written and
-reviewed with Claude rather than by hand line-by-line.** That is offset by an
-audio regression harness that gates every change touching the engine (below),
-and a written plan (`docs/ROADMAP.md`) scoping each change before it lands, but
-it is worth knowing going in.
+This fork continues [haiori's macOS port](https://github.com/hai0ri/dtblkfx_mac).
+**But as a heads-up: The changes to the original repo are vibe coded (written and
+reviewed with Claude rather than by hand line-by-line).** I'm not a professional 
+software developer but a huge fan of the original plugin so I will do my best to 
+honor the work that has been done before me.
+An audio regression harness that gates every change touching the engine (below),
+and a written plan (`docs/ROADMAP.md`) scoping each change before it lands are set
+to make sure the quality of the code is as good as I can make it.
+
+Some notes if you wanna build it yourself:
 
 - **One universal build.** `arm64` and `x86_64` in a single CMake invocation, so
   the plugin runs natively and under Rosetta. vcpkg is gone; FFTW is built from
   source for both slices by `tools/build_fftw_universal.sh`.
-- **An offline audio regression harness.** `./tools/check_audio.sh` renders a
-  fixed signal through all 31 effect types and diffs the result against checked-in
-  fingerprints, so a refactor cannot quietly change how the plugin sounds.
-- **The engine's startup NaN bug has been root-caused.** `_chan[].x0/x1/x2` come
-  from `fftwf_malloc`, which doesn't zero, so a recycled-memory instance (i.e.
-  any instance loaded into a DAW that's been running a while) can transform
-  garbage on its first FFT window. The fix is scoped and verified but not yet
-  applied — see Phase 3 in `docs/ROADMAP.md`.
 - **Built as `DtBlkFx Dev`** with its own plugin code, so it can be installed
   alongside an existing `DtBlkFx_GUI` build and A/B'd in the same session.
-- **The output limiter defaults to off.** It is a post-port addition rather than
-  part of the original plugin, and has not been reviewed yet.
 
 Start with [`BUILDING.md`](BUILDING.md) to build it,
 [`CLAUDE.md`](CLAUDE.md) for how the code is laid out and what to watch out for
@@ -63,6 +59,8 @@ Building installs the plugin for you, to
 There is no Audio Unit build yet: JUCE 6 builds the AU's resource fork with
 `Rez`, which requires a full Xcode install rather than just the Command Line
 Tools. See `docs/ROADMAP.md`, Phase 4.
+
+---
 
 ## Building from Source
 
@@ -117,4 +115,4 @@ This project is licensed under the GNU General Public License v2.0 (or later). S
 ## Credits
 - **Original Author**: Darrell Tam
 - **macOS/JUCE Port**: haiori
-- **Modernization / UX rework**: miruu-xyz
+- **Modernization / UX rework (WIP)**: miruu
