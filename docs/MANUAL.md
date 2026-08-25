@@ -14,6 +14,10 @@ This software incorporates code from *fastest-fourier-transform-in-the-west 3.1.
 
 *DtBlkFx* is a Fast-Fourier-Transform (FFT) based Virtual Sound Technology (VST) plug-in for use in a variety of audio software running under Microsoft Windows 2000 or newer.
 
+This is a macOS port, built as a universal VST3 (Apple Silicon & Intel). It
+targets macOS 10.13 or newer but has so far only actually been run and tested
+on macOS 15.
+
 Use it for...
 
 - Precision parametric equalizing with sharp-roll off
@@ -71,7 +75,7 @@ What is all that stuff? Read on...
 
 These are the parameters along the top.
 
-| | |
+| Parameter | Description |
 | --- | --- |
 | ***MixBack*** | Percentage mix back of original sound. Set this to 100% to save CPU if you don't want any effect apart from delay.<br><br>VstParam: MixBack |
 | ***Power*** | Power can be set to *match* or *filter*.<br><br>*Match* causes the output "power" to be amplified or attenuated to be the same as the input "power". This means individual effect amplitudes are relative to one another. It also means that if you remove a large portion of your frequency spectrum then left over stuff may end up sounding very loud.<br><br>*Filter* mode operates like a traditional filter where the output power may be very different to the input power. This mode is of most use when using *DtBlkFx* as a parametric equalizer.<br><br>VstParam: MixBack shared parameter, if MixBack param < 0.5 then power is *match* otherwise power is *filter*. |
@@ -102,7 +106,7 @@ Each effect line in the user interface consists of 5 parameters as shown below.
 
 Note that the numbers in the selected frequency range correspond to *C* octave - e.g. "4" is the frequency of *C-4*.
 
-| | |
+| Parameter | Description |
 | --- | --- |
 | ***FreqA / FreqB*** | Use these to select a frequency range for the effect. The frequency is displayed in Hertz and the selected range is shown in *inverse* on the *spectrograms*.<br><br>For non-harmonic effects *FreqA* & *FreqB* are used to select or exclude a frequency range to process. Set *FreqA* less than *FreqB* to include the region between them otherwise the range is excluded.<br><br><p align="center"><img src="data/freqselect.gif"></p><br>Use the smallest possible frequency range for an effect to save on CPU.<br><br>Right-click-drag on *FreqA* or *FreqB* to slide both at once.<br><br>VstParam: \<n\>: FreqA / \<n\>: FreqB |
 | ***Amp*** | *Amplitude* controls the amplitude of the selected frequency range for effect. For some effects it controls the mix-back amount (wet to dry ratio).<br><br>If the overall *power* parameter is set to *match* then the gain/attenuation is relative - raising the *Amplitude* of the selected frequency range effectively decreases that of the other frequencies.<br><br>VstParam: \<n\>: Amp |
@@ -117,7 +121,7 @@ There are 2 categories of effects as described below: *Normal* and *Masking*.
 
 ***Normal Effects***
 
-| | |
+| Effect | Description |
 | --- | --- |
 | ***Filter*** | Parametric equalizer - adjust the amplitude of the frequency range specified. This does not use the effect *value* control.<br><br>Some of the other effects have this capability too but will tend to use more CPU if this is all you want to do. |
 | ***Contrast*** | *Contrast*  changes the dynamic range of frequencies present in the sound. <br><br> Positive contrast results in the reduction of noise and softer frequency components. Small amounts are useful for reducing distortion and un-muddying sound. When applied heavily only the loudest tones remain but can end up sounding like nasty audio compression on dodgey web videos. <br><br>Negative values flatten the frequency spectrum and increase noise. Small to medium amounts are useful for adding "body".<br><br><p align="center"><img src="data/contrast.gif"></p> |
@@ -141,7 +145,7 @@ Masks will operate with any other non-mask effect unless specifically noted.
 
 Note: A normal effect can only have one mask (i.e. if you set 2 masks in a row then the first mask will be ignored).
 
-| | |
+| Effect | Description |
 | --- | --- |
 | ***HarmMask*** | *HarmMask* is the masking version of *HarmFilt* and allows you to apply any normal effect to the harmonics of a particular note. |
 | ***AutoHarmMask*** | *AutoHarmMask* is the masking version of *AutoHarm* and has the same effect *value* meaning. |
@@ -152,7 +156,7 @@ Note: A normal effect can only have one mask (i.e. if you set 2 masks in a row t
 
 These effects require 2 channels to operate.
 
-| | |
+| Effect | Description |
 | --- | --- |
 | ***Vocode*** | *Vocode* mixes the two channels by taking the frequency envelope of the left channel and applying it to the right channel (with the result in both the left and right).<br><br>Example: feed voice into the left channel (red spectrum) and some strings into the right (blue spectrum). *DtBlkFx* will mix the voice and the strings to produce talking strings (which is just just what we need).<br><br><p align="center"><img src="data/vocode.jpg"></p><br>*Vocode* takes the frequency envelope of the left channel and applies it to the right channel. It operates by dividing the spectrum into a number of blocks (controlled by effect *value*) and adjusting the amplitude of each block from the right channel so as to power-match with the corresponding block in the left channel.<br><br>When *FreqA* < *FreqB* then processing on the right channel is limited to that range while the entire spectrum is used from the left channel. If *FreqB* < *FreqA* then the entire spectrum of the right channel is processed while the envelope from the left channel is limited to the *FreqB-FreqA* range.<br><br>Mask effects are not supported and will do nothing. |
 | ***HarmMatchLR***<br>***HarmMatchRL*** | *HarmMatchLR & HarmMatchRL* match the power from each harmonic in one channel to the corresponding harmonic in the other resulting in a different type of vocoding.<br><br>*HarmMatchLR* uses the left channel as a reference and adjusts the right channel to match while *HarmMatchRL* goes the other way (right is reference, left is adjusted). Both versions of the effect output the adjusted channel on both left & right channels (i.e. reference is not output) and always set the overall output power to match the left channel.<br><br><p align="center"><img src="data/harmmatch2.gif"></p><br>The fundamental frequency (centre of the first block) for each channel is automatically set by the loudest peak within the *FreqA/FreqB* range. The effect *value* controls the harmonic *width* and *all/odd/even/between* setting. Refer to *AutoHarm* for more information - as with all other harmonic effects these only work as described for single voice sounds (although it will do interesting things on chords).<br><br>Use *AutoHarmMask* in the effect position immediately above to allow individual control over channel 1 & channel 2. The *AutoHarmMask* settings (*FreqA/FreqB* & *value*) refer to channel 1 while the *HarmMatch* settings refer to channel 2 - this means you can set different fundamental search ranges and harmonic settings for each channel.<br><br>*ThreshMask* and *HarmMask* are not supported and will do nothing.<br><br>The above diagram differs from what you will see in the spectrogram because of a different frequency scale (logarithmic). |
@@ -186,13 +190,6 @@ All of the graphics components (*32 bit portable network graphics* format) for t
 
 The *Fastest-Fourier-Transform-in-the-West* (version 3.1.2) is used to perform frequency transforms. Many thanks to everyone that made FFTW (please see [http://www.fftw.org/fftw3_doc/Acknowledgments.html](http://www.fftw.org/fftw3_doc/Acknowledgments.html)) *libpng/zlib* (please see [www.zlib.net](http://www.zlib.net/) and [www.libpng.org/pub/png/libpng.html](http://www.libpng.org/pub/png/libpng.html)) and VSTSDK/VSTGUI (please see [ygrabit.steinberg.de/~ygrabit/public_html/index.html](http://ygrabit.steinberg.de/~ygrabit/public_html/index.html)).
 
-I plan on implementing the following stuff in a future version of *DtBlkFx*
-
-- setInitialDelay()
-- Param Morphing (actually largely implemented but needs more stuff in the GUI)
-- More spectrogram controls
-- Maybe a rewrite for a "modular-synth" style architecture
-
 ## Contact
 
 *DtBlkFx* was originally written by Darrell Tam. This is a macOS port maintained
@@ -200,7 +197,7 @@ separately from the original author — please direct bug reports, comments and
 suggestions about this build to its repo rather than to Darrell, since issues
 here may well have been introduced by the port rather than the original engine.
 
-| | |
+| Field | Value |
 | --- | --- |
 | Original Author | Darrell Tam |
 | Bug reports (this port) | [github.com/miruu-xyz/dtblkfx_mac](https://github.com/miruu-xyz/dtblkfx_mac/issues) |
