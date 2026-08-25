@@ -50,7 +50,7 @@ Start with [`BUILDING.md`](BUILDING.md) to build it,
 in the engine, and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is planned —
 GUI rework, real parameter units, factory presets, and a true stereo sidechain
 are all scoped there but not yet built. For what the effects actually do, see
-the original [`docs/manual/MANUAL.md`](docs/manual/MANUAL.md).
+the original [`docs/MANUAL.md`](docs/MANUAL.md).
 
 ## Installation
 
@@ -111,7 +111,7 @@ Several of these controls pack a mode flag and an amount into one value and are
 not monotonic — see the "Landmines" section of `CLAUDE.md` before automating them.
 
 For a full walkthrough of every effect and mask type, see
-[`docs/manual/MANUAL.md`](docs/manual/MANUAL.md) — Darrell Tam's original
+[`docs/MANUAL.md`](docs/MANUAL.md) — Darrell Tam's original
 DtBlkFx user guide, carried over from the
 [upstream repo](https://codeberg.org/skullzy/DtBlkFx/src/branch/main/docs).
 
