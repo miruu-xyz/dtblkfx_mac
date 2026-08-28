@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DesignPalette.h"
 #include <juce_dsp/juce_dsp.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -96,13 +97,13 @@ public:
     }
 
     // Draw Label
-    g.setColour(juce::Colours::white);
-    g.setFont(14.0f);
-    g.drawText(label, getLocalBounds().reduced(5), juce::Justification::topRight, true);
+    g.setColour(design::colour::bevelLight);
+    g.setFont(fonts->pixel(10.0f));
+    g.drawText(label, getLocalBounds().reduced(7), juce::Justification::topRight, true);
 
-    // Draw Grid/Overlay
-    g.setColour(juce::Colours::white.withAlpha(0.3f));
-    g.drawRect(getLocalBounds(), 1);
+    // Grid. The design draws no centre line, but it is useful while the
+    // frequency mapping is still the old linear one -- revisit in 6.7.
+    g.setColour(design::colour::bevelLight.withAlpha(0.3f));
     g.drawLine(0, h / 2.0f, (float)w, h / 2.0f);
   }
 
@@ -116,6 +117,7 @@ public:
   void timerCallback() override {}
 
 private:
+  juce::SharedResourcePointer<design::FontStore> fonts;
   juce::Image image;
   int currentX = 0;
   juce::String label;

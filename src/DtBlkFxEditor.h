@@ -123,6 +123,7 @@ public:
     void resized() override;
 
     DtBlkFxAudioProcessor& processor;
+    juce::SharedResourcePointer<design::FontStore> fonts;
     juce::Slider ceilingSlider, gainSlider, releaseSlider;
     juce::ToggleButton enableButton;
     juce::Label ceilingLabel, gainLabel, releaseLabel;

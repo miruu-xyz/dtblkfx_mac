@@ -67,17 +67,14 @@ HeaderComponent::HeaderComponent(juce::AudioProcessorValueTreeState& apvts)
   // Sync Button
   addAndMakeVisible(syncButton);
   syncButton.setButtonText("Sync");
-  syncButton.setColour(juce::ToggleButton::textColourId, juce::Colours::white);
-  syncButton.setColour(juce::ToggleButton::tickColourId, juce::Colours::green);
   syncButton.onClick = [this] { updateOverlapParam(); };
 
   // Labels
   auto addLabel = [this](juce::Label& l, const juce::String& text) {
     addAndMakeVisible(l);
     l.setText(text, juce::dontSendNotification);
-    l.setFont(12.0f);
+    l.setFont(retroLnF.fonts->pixel(10.0f));
     l.setJustificationType(juce::Justification::centred);
-    l.setColour(juce::Label::textColourId, juce::Colours::white);
   };
 
   // Readouts. The mix slider runs "wet", i.e. the inverse of MixBack, and the
@@ -109,9 +106,6 @@ HeaderComponent::HeaderComponent(juce::AudioProcessorValueTreeState& apvts)
   auto setupLock = [this](juce::ToggleButton& b) {
     addAndMakeVisible(b);
     b.setButtonText("Lock");
-    b.setColour(juce::ToggleButton::textColourId, juce::Colours::white.withAlpha(0.5f));
-    b.setColour(juce::ToggleButton::tickColourId, juce::Colours::red);
-    b.setColour(juce::ToggleButton::tickDisabledColourId, juce::Colours::grey);
   };
 
   setupLock(mixLock);
@@ -227,7 +221,7 @@ void HeaderComponent::refreshTexts()
 
 void HeaderComponent::paint(juce::Graphics& g)
 {
-  g.fillAll(juce::Colours::black.withAlpha(0.2f));
+  g.fillAll(design::colour::baseGrey);
 
   if (logo.isValid()) {
     int logoH = 60;
@@ -236,7 +230,7 @@ void HeaderComponent::paint(juce::Graphics& g)
     g.drawImage(logo, logoX, 10, logoW, logoH, 0, 0, logo.getWidth(), logo.getHeight());
   }
   else {
-    g.setColour(juce::Colours::red);
+    g.setColour(design::colour::warning);
     g.drawRect((getWidth() - 100) / 2, 10, 100, 60, 2);
     g.drawText(
         "LOGO MISSING", (getWidth() - 100) / 2, 10, 100, 60, juce::Justification::centred, false);
@@ -367,9 +361,8 @@ ParameterRowComponent::ParameterRowComponent(DtBlkFxAudioProcessor& p, int index
     auto setupLabel = [&](juce::Label& l, const juce::String& text) {
       addAndMakeVisible(l);
       l.setText(text, juce::dontSendNotification);
-      l.setFont(10.0f);
+      l.setFont(retroLnF.fonts->pixel(9.0f));
       l.setJustificationType(juce::Justification::centred);
-      l.setColour(juce::Label::textColourId, juce::Colours::white);
     };
 
     setupLabel(freqALabel, "Freq A");
@@ -405,14 +398,10 @@ ParameterRowComponent::ParameterRowComponent(DtBlkFxAudioProcessor& p, int index
   // Lock Button
   addAndMakeVisible(lockButton);
   lockButton.setButtonText("Lock");
-  lockButton.setColour(juce::ToggleButton::textColourId, juce::Colours::white.withAlpha(0.5f));
-  lockButton.setColour(juce::ToggleButton::tickColourId, juce::Colours::red);
 
   // On/Off Button
   addAndMakeVisible(onOffButton);
   onOffButton.setButtonText("On");
-  onOffButton.setColour(juce::ToggleButton::textColourId, juce::Colours::white);
-  onOffButton.setColour(juce::ToggleButton::tickColourId, juce::Colours::green);
   onOffButton.setToggleState(true, juce::dontSendNotification); // Default On
 
   // Handle On/Off logic
@@ -466,8 +455,10 @@ void ParameterRowComponent::refreshTexts()
 
 void ParameterRowComponent::paint(juce::Graphics& g)
 {
-  if (rowIndex % 2 == 0)
-    g.fillAll(juce::Colours::white.withAlpha(0.05f));
+  // Rows alternate against the window grey. The design's dashed outline and
+  // amp/frequency graphics replace this wholesale in Phase 6.6.
+  g.fillAll(rowIndex % 2 == 0 ? design::colour::bevelLightSoft : design::colour::baseGrey);
+  RetroLookAndFeel::drawBevel(g, getLocalBounds(), false);
 }
 
 void ParameterRowComponent::resized()
@@ -578,16 +569,13 @@ DtBlkFxEditor::LimiterComponent::LimiterComponent(DtBlkFxAudioProcessor& p)
 
   addAndMakeVisible(enableButton);
   enableButton.setButtonText("Limiter");
-  enableButton.setColour(juce::ToggleButton::textColourId, juce::Colours::white);
-  enableButton.setColour(juce::ToggleButton::tickColourId, juce::Colours::green);
 
   // Labels
   auto setupLabel = [&](juce::Label& l, const juce::String& text, juce::Component& target) {
     addAndMakeVisible(l);
     l.setText(text, juce::dontSendNotification);
-    l.setFont(12.0f);
+    l.setFont(fonts->pixel(10.0f));
     l.setJustificationType(juce::Justification::centred);
-    l.setColour(juce::Label::textColourId, juce::Colours::white);
     l.attachToComponent(&target, false);
   };
 
@@ -608,9 +596,8 @@ DtBlkFxEditor::LimiterComponent::LimiterComponent(DtBlkFxAudioProcessor& p)
 
 void DtBlkFxEditor::LimiterComponent::paint(juce::Graphics& g)
 {
-  g.fillAll(juce::Colours::white.withAlpha(0.05f));
-  g.setColour(juce::Colours::white.withAlpha(0.2f));
-  g.drawRect(getLocalBounds(), 1);
+  g.fillAll(design::colour::baseGrey);
+  RetroLookAndFeel::drawBevel(g, getLocalBounds(), true);
 }
 
 void DtBlkFxEditor::LimiterComponent::resized()
@@ -675,9 +662,9 @@ DtBlkFxEditor::FooterComponent::FooterComponent(DtBlkFxEditor& e)
 
 void DtBlkFxEditor::FooterComponent::paint(juce::Graphics& g)
 {
-  g.fillAll(juce::Colours::black);
-  g.setColour(juce::Colours::white.withAlpha(0.2f));
-  g.drawLine(0, 0, getWidth(), 0, 1.0f);
+  g.fillAll(design::colour::baseGrey);
+  g.setColour(design::colour::bevelDarkSoft);
+  g.drawLine(0, 0, (float)getWidth(), 0, 1.0f);
 }
 
 void DtBlkFxEditor::FooterComponent::resized()
@@ -934,7 +921,7 @@ void DtBlkFxEditor::timerCallback()
 
 void DtBlkFxEditor::paint(juce::Graphics& g)
 {
-  g.fillAll(juce::Colours::black);
+  g.fillAll(design::colour::baseGrey);
 }
 
 void DtBlkFxEditor::resized()

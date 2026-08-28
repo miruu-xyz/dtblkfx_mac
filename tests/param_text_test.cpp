@@ -13,6 +13,7 @@
  * See LICENSE.md for copyright and licensing information.
  */
 
+#include "DesignPalette.h"
 #include "DtBlkFxProcessor.h"
 #include <cstdio>
 
@@ -244,6 +245,45 @@ int main()
       }
     check(overlap->getText(0.0f, 0) == "0%", "overlap 0 reads " + overlap->getText(0.0f, 0));
     check(overlap->getText(1.0f, 0) == "85%", "overlap 1 reads " + overlap->getText(1.0f, 0));
+  }
+
+  // Phase 6.1: the embedded fonts. createSystemTypefaceFor returns null on a
+  // file it cannot parse, and juce::Font then falls back to a system face
+  // without complaining -- so a broken BinaryData wiring looks like a slightly
+  // wrong-looking GUI rather than an error. Catch it here instead.
+  {
+    juce::ScopedJuceInitialiser_GUI gui;
+    design::FontStore fonts;
+
+    std::printf("\nembedded fonts\n");
+    const std::pair<const char*, juce::Typeface::Ptr> loaded[]{
+        {"Monaspace Xenon", fonts.xenon},
+        {"Monaspace Xenon Wide", fonts.xenonWide},
+        {"Player Sans Mono", fonts.playerSans}};
+
+    for (const auto& [expected, face] : loaded) {
+      check(face != nullptr, juce::String(expected) + " failed to load from BinaryData");
+      if (face == nullptr)
+        continue;
+
+      std::printf("  %-24s -> %s\n", expected, face->getName().toRawUTF8());
+      check(face->getName().containsIgnoreCase(juce::String(expected).upToFirstOccurrenceOf(
+                " ", false, false)),
+            juce::String("expected ") + expected + ", loaded \"" + face->getName() + "\"");
+      check(juce::Font(face).withPointHeight(16.0f).getStringWidth("MMMM") > 0,
+            juce::String(expected) + " measures to zero width");
+    }
+
+    // Both Monaspace cuts carry the family name "Monaspace Xenon", so the name
+    // alone cannot tell them apart -- if the Wide Light file were missing or
+    // mis-wired, the headings would silently render in the regular cut. The
+    // width is what actually distinguishes them.
+    if (fonts.xenon != nullptr && fonts.xenonWide != nullptr) {
+      const auto regular = juce::Font(fonts.xenon).withPointHeight(28.0f).getStringWidth("BlkLen");
+      const auto wide = juce::Font(fonts.xenonWide).withPointHeight(28.0f).getStringWidth("BlkLen");
+      std::printf("  %-24s -> regular %dpx, wide %dpx\n", "\"BlkLen\" at 28pt", regular, wide);
+      check(wide > regular, "the wide cut is not wider than the regular one");
+    }
   }
 
   std::printf(failures == 0 ? "\nparam text: all checks passed\n"

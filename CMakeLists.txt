@@ -138,7 +138,15 @@ juce_add_plugin(DtBlkFx
     # the bundle lands in the plug-in folder.
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
-juce_add_binary_data(DtBlkFxAssets SOURCES dtblkfx_src/dtblkfx_logo.png)
+# Fonts are embedded rather than installed: the design (Figma node 6-669) is
+# specified in Monaspace Xenon and Player Sans Mono 8x8, and a plug-in cannot
+# rely on a host machine having either. Both are SIL OFL 1.1; the licences ship
+# alongside them in assets/fonts/.
+juce_add_binary_data(DtBlkFxAssets SOURCES
+    dtblkfx_src/dtblkfx_logo.png
+    assets/fonts/MonaspaceXenonRegular.otf
+    assets/fonts/MonaspaceXenonWideLight.otf
+    assets/fonts/PlayerSansMono8x8Classic.ttf)
 
 target_sources(DtBlkFx PRIVATE
     src/DtBlkFxProcessor.cpp
@@ -200,7 +208,9 @@ target_link_libraries(dtblkfx_paramtext PRIVATE
     juce::juce_dsp
     juce::juce_gui_extra
     juce::juce_recommended_config_flags)
-target_include_directories(dtblkfx_paramtext PRIVATE src)
+target_include_directories(dtblkfx_paramtext PRIVATE
+    src
+    ${CMAKE_BINARY_DIR}/juce_binarydata_DtBlkFxAssets/JuceLibraryCode)
 target_compile_features(dtblkfx_paramtext PRIVATE cxx_std_17)
 
 # ── Offline render / regression harness ───────────────────────────────────────
