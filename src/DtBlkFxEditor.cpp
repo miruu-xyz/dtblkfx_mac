@@ -31,11 +31,11 @@ void useParamText(juce::Slider& s,
 } // namespace
 
 //==============================================================================
-HeaderComponent::HeaderComponent(DtBlkFxAudioProcessor& p)
+HeaderComponent::HeaderComponent(DtBlkFxAudioProcessor& p, design::LockHoverState& lockHover)
     : knob(p)
-    , delayHeading(p, design::GlobalHeading::Which::delay)
-    , overlapHeading(p, design::GlobalHeading::Which::overlap)
-    , blkLenHeading(p, design::GlobalHeading::Which::blkLen)
+    , delayHeading(p, design::GlobalHeading::Which::delay, lockHover)
+    , overlapHeading(p, design::GlobalHeading::Which::overlap, lockHover)
+    , blkLenHeading(p, design::GlobalHeading::Which::blkLen, lockHover)
 {
   for (auto* c : {(juce::Component*)&knob,
                   (juce::Component*)&delayHeading,
@@ -74,13 +74,16 @@ void HeaderComponent::resized()
   juce::Component* headings[]{&delayHeading, &overlapHeading, &blkLenHeading};
   for (int i = 0; i < 3; ++i) {
     area.removeFromLeft(gap);
-    headings[i]->setBounds(area.removeFromLeft(widths[i + 1]).withHeight(38));
+    headings[i]->setBounds(area.removeFromLeft(widths[i + 1]));
   }
 }
 
 //==============================================================================
-ParameterRowComponent::ParameterRowComponent(DtBlkFxAudioProcessor& p, int index)
+ParameterRowComponent::ParameterRowComponent(DtBlkFxAudioProcessor& p,
+                                             int index,
+                                             design::LockHoverState& lh)
     : processor(p)
+    , lockHover(lh)
     , rowIndex(index)
 {
   setLookAndFeel(&retroLnF);
@@ -192,6 +195,7 @@ ParameterRowComponent::ParameterRowComponent(DtBlkFxAudioProcessor& p, int index
   // Lock Button
   addAndMakeVisible(lockButton);
   lockButton.setButtonText("Lock");
+  lockButton.addMouseListener(this, false);
 
   // On/Off Button
   addAndMakeVisible(onOffButton);
@@ -239,6 +243,23 @@ ParameterRowComponent::ParameterRowComponent(DtBlkFxAudioProcessor& p, int index
   };
 }
 
+ParameterRowComponent::~ParameterRowComponent()
+{
+  lockHover.set(this, false);
+}
+
+void ParameterRowComponent::mouseEnter(const juce::MouseEvent& e)
+{
+  if (e.eventComponent == &lockButton)
+    lockHover.set(this, true);
+}
+
+void ParameterRowComponent::mouseExit(const juce::MouseEvent& e)
+{
+  if (e.eventComponent == &lockButton)
+    lockHover.set(this, false);
+}
+
 void ParameterRowComponent::refreshTexts()
 {
   // The effect type decides what the other four read, and the frequencies also
@@ -251,7 +272,8 @@ void ParameterRowComponent::paint(juce::Graphics& g)
 {
   // Rows alternate against the window grey. The design's dashed outline and
   // amp/frequency graphics replace this wholesale in Phase 6.6.
-  g.fillAll(rowIndex % 2 == 0 ? design::colour::bevelLightSoft : design::colour::baseGrey);
+  g.fillAll(rowIndex % 2 == 0 ? design::colour::bevelLight.withAlpha(0.45f)
+                              : design::colour::windowBg);
   RetroLookAndFeel::drawBevel(g, getLocalBounds(), false);
 }
 
@@ -390,7 +412,7 @@ DtBlkFxEditor::LimiterComponent::LimiterComponent(DtBlkFxAudioProcessor& p)
 
 void DtBlkFxEditor::LimiterComponent::paint(juce::Graphics& g)
 {
-  g.fillAll(design::colour::baseGrey);
+  g.fillAll(design::colour::windowBg);
   RetroLookAndFeel::drawBevel(g, getLocalBounds(), true);
 }
 
@@ -410,6 +432,7 @@ void DtBlkFxEditor::LimiterComponent::resized()
 //==============================================================================
 DtBlkFxEditor::FooterComponent::FooterComponent(DtBlkFxEditor& e)
     : owner(e)
+    , randomizeButton(e.lockHover)
 {
   addAndMakeVisible(randomizeButton);
   randomizeButton.onClick = [&] { owner.startRandomization(); };
@@ -452,7 +475,7 @@ DtBlkFxEditor::FooterComponent::FooterComponent(DtBlkFxEditor& e)
 
 void DtBlkFxEditor::FooterComponent::paint(juce::Graphics& g)
 {
-  g.fillAll(design::colour::baseGrey);
+  g.fillAll(design::colour::windowBg);
 }
 
 void DtBlkFxEditor::FooterComponent::resized()
@@ -631,13 +654,17 @@ void DtBlkFxEditor::loadFactoryPreset(int index)
 DtBlkFxEditor::DtBlkFxEditor(DtBlkFxAudioProcessor& p)
     : AudioProcessorEditor(&p)
     , audioProcessor(p)
-    , header(p)
+    , header(p, lockHover)
     , inputSpectrogram("Input Left")
     , outputSpectrogram("Output Left")
     , footer(*this)
     , limiter(p)
 {
   setLookAndFeel(&retroLnF);
+
+  // Gives clicks on the window background somewhere to move focus to, which is
+  // what dismisses an open inline editor. See DraggableValue's constructor.
+  setWantsKeyboardFocus(true);
 
   addAndMakeVisible(titleBar);
   addAndMakeVisible(header);
@@ -652,7 +679,7 @@ DtBlkFxEditor::DtBlkFxEditor(DtBlkFxAudioProcessor& p)
   outputSpectrogram.setLabel("Output L+R");
 
   for (int i = 0; i < 8; ++i) {
-    auto row = std::make_unique<ParameterRowComponent>(p, i);
+    auto row = std::make_unique<ParameterRowComponent>(p, i, lockHover);
     addAndMakeVisible(*row);
     paramRows.push_back(std::move(row));
   }
@@ -700,7 +727,7 @@ void DtBlkFxEditor::timerCallback()
 
 void DtBlkFxEditor::paint(juce::Graphics& g)
 {
-  g.fillAll(design::colour::baseGrey);
+  g.fillAll(design::colour::windowBg);
   RetroLookAndFeel::drawBevel(g, getLocalBounds(), true);
 }
 
@@ -714,10 +741,19 @@ void DtBlkFxEditor::resized()
 
   titleBar.setBounds(area.removeFromTop(36).reduced(4));
 
-  area.removeFromTop(26);
-  auto content = area.withTrimmedLeft(6).withTrimmedRight(6);
+  // The design leaves 26px under the title bar; that reads as a gap rather than
+  // as padding at this size, so it is tightened here.
+  area.removeFromTop(10);
+  auto content = area.withTrimmedLeft(6).withTrimmedRight(6).withTrimmedBottom(8);
 
-  header.setBounds(content.removeFromTop(40));
+  // The footer is anchored to the bottom rather than flowed to it, so whatever
+  // rounding is left over collects above it instead of below.
+  footer.setBounds(content.removeFromBottom(44));
+
+  // 46 rather than the design's 40: the readout needs more air under the
+  // heading than the design allows, and the lock and sync glyphs need their
+  // hover highlights to fit.
+  header.setBounds(content.removeFromTop(46));
   content.removeFromTop(26);
 
   inputSpectrogram.setBounds(content.removeFromTop(177));
@@ -729,6 +765,4 @@ void DtBlkFxEditor::resized()
     row->setBounds(content.removeFromTop(40));
     content.removeFromTop(3);
   }
-
-  footer.setBounds(content.removeFromTop(44));
 }

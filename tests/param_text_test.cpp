@@ -293,6 +293,7 @@ int main(int argc, char** argv)
     const std::pair<const char*, juce::Typeface::Ptr> loaded[]{
         {"Monaspace Xenon", fonts.xenon},
         {"Monaspace Xenon Wide", fonts.xenonWide},
+        {"Monaspace Xenon Wide Italic", fonts.xenonWideItalic},
         {"Player Sans Mono", fonts.playerSans}};
 
     for (const auto& [expected, face] : loaded) {

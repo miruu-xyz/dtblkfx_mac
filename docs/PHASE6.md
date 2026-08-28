@@ -209,6 +209,89 @@ host can close the editor while a `showMenuAsync` menu is still up, and a
 `TextEditor` must not be deleted from inside its own focus-lost callback. Both
 now go through `Component::SafePointer`.
 
+### 6.2 follow-ups
+
+A first review pass produced eight changes, all in `DesignChrome`:
+
+- **Headings and glyphs are drawn as paths, not `drawText`.** `drawText` clips
+  to its box, which was cropping the readouts, and cannot outline or shadow.
+  `textAsPath` + `drawRaised` give the design's treatment: purple glow, white
+  edge, grey fill. The outline width is a parameter because 1.2px suits a 28px
+  heading and closes up a 9px padlock.
+- **Headings are set in a real italic cut**, `MonaspaceXenonWideLightItalic`.
+  `Font::italicised` cannot synthesise a slant for an embedded typeface -- it
+  comes back upright without complaint.
+- **The gauge reads dry/wet**, inverting MixBack. See the note in `CLAUDE.md`;
+  the drag direction, the menu labels and typed entry all invert with it.
+- **The gauge is centred between FILT and POWR**, which is not the centre of its
+  component.
+- **Click targets inside drag targets get a pointing-hand cursor**: FILT, POWR,
+  the locks and the sync glyphs. Their hit areas are padded by 3px, both so a
+  9px glyph is clickable and so the hover highlight has room.
+- **A hovered lock or sync glyph brightens the ground behind it.** At 9px the
+  glyph alone is too small for a colour change to register.
+- **Overlap appends " sync"** when the flag is on. Turning it on otherwise
+  changes nothing visible, since the percentage stays put.
+- **Hovering any lock outlines RANDOM in purple and lifts its face**, via
+  `design::LockHoverState`. Sources register by address rather than setting a
+  shared bool, because several locks hover and unhover independently and the
+  last to report must not clear the others. It is owned by the editor, never a
+  global -- a host can have several windows open on different instances. The
+  eight FX-row locks report through a mouse listener for now; 6.3's glyphs will
+  report directly.
+
+A second pass:
+
+- **The window ground is `#E8EAEF`, not `#C0C0C0`.** Sampled from the Figma
+  render, confirmed against the design. There are two greys now: `windowBg` for
+  the ground, and `baseGrey` for control faces -- buttons, the help box, the
+  dropdowns -- which stay Win95 grey, as `help_button.svg` filling its own rect
+  with `#C0C0C0` confirms.
+- The gauge uses the same cursor as the headings, and has lost its white ring.
+- **A closed padlock is `textDim`**, the same 60% black as the heading beside it.
+- The lock and sync glyphs moved down (`y` 5 and 22) so `glyphHitArea`'s 3px
+  padding -- and therefore the hover highlight -- stays inside the component.
+  It was being clipped at the top.
+- **The gap under the title bar is 10px, not the design's 26.** At this size 26
+  reads as a gap rather than as padding. The header band is 46 rather than the
+  design's 40, which buys the air between heading and readout and the room the
+  glyph highlights need.
+- **The footer is anchored to the bottom** rather than flowed to it, so leftover
+  rounding collects above it instead of below.
+- **The two beat-sync states now match.** The off glyph ships as one path with
+  the cross included, which pushes its bounding box to 10x10 against the on
+  state's 9x9 -- scaling each to fit its own ink therefore drew the off arrows
+  smaller and offset, and they jumped on every click. The cross is split into
+  `beatSyncCross`, and `Glyphs::scaledFrom` places all three parts from a shared
+  10x10 grid instead of from their own bounds.
+- **The inline editor can be dismissed again.** JUCE only fires `focusLost`
+  when focus actually moves somewhere, and it finds that somewhere by walking up
+  from whatever was clicked -- so with every painted component declining focus,
+  the editor kept it and went on swallowing clicks and keys. `DraggableValue`
+  and the top-level editor now both `setWantsKeyboardFocus(true)`, which gives
+  clicks somewhere to land; `mouseDown` also returns early while an editor is
+  open, so dismissing does not simultaneously start a drag underneath.
+- **Right-click menus use the plugin's LookAndFeel.** `PopupMenu` resolves its
+  LookAndFeel from `menu.lookAndFeel`, falling back to the *menu window's* own
+  -- which is a desktop-level component, so it got stock JUCE styling while the
+  preset dropdown beside it did not. `menu.setLookAndFeel(&getLookAndFeel())`
+  fixes it, and it is safe across the editor closing: the member is a
+  `WeakReference`, and `windowIsStillValid()` dismisses a menu whose target
+  component has gone. `drawPopupMenuBackground` gives it the design's flat white
+  box with a thin grey edge instead of V4's rounded, shadowed one.
+- **Inactive lock and inactive sync are both 60% black**, the same as the
+  heading beside them. The open and closed padlock shapes carry the lock state,
+  not the weight.
+- **The glyph outline is 0.45px.** The white outline is a
+  fixed width, so it takes a far larger share of a 9px glyph's stroke than of a
+  28px letterform; at 0.7px it washed the glyphs out toward the background
+  whatever colour was underneath them.
+
+`tools/pngpick.py` reads pixel colours out of a PNG, which is how the ground
+colour was taken off the Figma render. Export a frame, sample the same point in
+both it and a `--shot`, compare. It decodes the PNG itself because there is no
+PIL here and adding one for six lines of colour-picking is not worth it.
+
 Guardrails after: `check_audio.sh` 71/71, `dtblkfx_paramtext` all passed.
 
 **Still wrong on screen after 6.2, by design:** the FX rows are the old

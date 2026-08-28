@@ -21,11 +21,17 @@ constexpr float dragRange = 200.0f;
 // A menu value below this is a command rather than a value to set.
 constexpr float commandValue = -1.0f;
 
+// White outline width for the header glyphs. Much thinner than the headings'
+// 1.2px: the stroke is a fixed width, so on a 9px padlock it closes the
+// counters and washes the whole glyph out toward the background.
+constexpr float glyphOutline = 0.45f;
+
 juce::Colour glyphColour(bool on, bool hovered)
 {
   if (hovered)
     return colour::accentBright;
-  return on ? colour::accent : colour::text.withAlpha(0.35f);
+
+  return on ? colour::accent : colour::textDim;
 }
 
 } // namespace
@@ -35,6 +41,14 @@ DraggableValue::DraggableValue(juce::RangedAudioParameter& p, juce::MouseCursor 
     : param(p)
 {
   setMouseCursor(cursor);
+
+  // Without this the inline editor cannot be dismissed by clicking away. JUCE
+  // only fires focusLost when focus actually moves to something else, and it
+  // finds that something by walking up from whatever was clicked -- so if
+  // nothing in the chain wants focus, the editor silently keeps it and goes on
+  // swallowing every key and click. The editor's top-level component sets the
+  // same flag, to catch clicks that land on the window background.
+  setWantsKeyboardFocus(true);
 }
 
 DraggableValue::~DraggableValue() = default;
@@ -53,6 +67,11 @@ void DraggableValue::mouseExit(const juce::MouseEvent&)
 
 void DraggableValue::mouseDown(const juce::MouseEvent& e)
 {
+  // A click anywhere while typing dismisses the editor rather than also
+  // starting a drag on whatever was underneath it.
+  if (editor != nullptr)
+    return;
+
   if (e.mods.isPopupMenu()) {
     showMenu();
     return;
@@ -72,7 +91,7 @@ void DraggableValue::mouseDrag(const juce::MouseEvent& e)
   // it. Up and right both increase.
   const auto delta = (float)(e.getDistanceFromDragStartX() - e.getDistanceFromDragStartY());
   param.setValueNotifyingHost(
-      juce::jlimit(0.0f, 1.0f, valueAtDragStart + delta / dragRange));
+      juce::jlimit(0.0f, 1.0f, valueAtDragStart + dragSign() * delta / dragRange));
   repaint();
 }
 
@@ -87,7 +106,8 @@ void DraggableValue::mouseUp(const juce::MouseEvent&)
 
 void DraggableValue::mouseDoubleClick(const juce::MouseEvent&)
 {
-  showEditor();
+  if (editor == nullptr)
+    showEditor();
 }
 
 void DraggableValue::showMenu()
@@ -97,6 +117,12 @@ void DraggableValue::showMenu()
     return;
 
   juce::PopupMenu menu;
+
+  // PopupMenu resolves its LookAndFeel from the default, not from the component
+  // it is attached to, so it has to be told -- otherwise these come up in the
+  // stock JUCE styling while the preset dropdown next to them does not.
+  menu.setLookAndFeel(&getLookAndFeel());
+
   for (size_t i = 0; i < entries.size(); ++i)
     menu.addItem((int)i + 1, entries[i].second);
 
@@ -132,7 +158,7 @@ void DraggableValue::showEditor()
   editor = std::make_unique<juce::TextEditor>();
   addAndMakeVisible(*editor);
   editor->setBounds(getLocalBounds().removeFromBottom(juce::jmin(18, getHeight())));
-  editor->setText(param.getCurrentValueAsText(), juce::dontSendNotification);
+  editor->setText(displayText(), juce::dontSendNotification);
   editor->selectAll();
   editor->grabKeyboardFocus();
 
@@ -152,7 +178,7 @@ void DraggableValue::showEditor()
   editor->onReturnKey = [this, dismiss] {
     param.beginChangeGesture();
     param.setValueNotifyingHost(
-        juce::jlimit(0.0f, 1.0f, param.getValueForText(editor->getText())));
+        juce::jlimit(0.0f, 1.0f, valueForDisplayText(editor->getText())));
     param.endChangeGesture();
     dismiss();
   };
@@ -161,7 +187,7 @@ void DraggableValue::showEditor()
 //==============================================================================
 MixBackKnob::MixBackKnob(DtBlkFxAudioProcessor& p)
     : DraggableValue(*p.apvts.getParameter(DtBlkFxAudioProcessor::mixBackId),
-                     juce::MouseCursor::UpDownLeftRightResizeCursor)
+                     juce::MouseCursor::UpDownResizeCursor)
     , processor(p)
 {
 }
@@ -176,12 +202,43 @@ juce::Rectangle<int> MixBackKnob::powrBounds() const
   return {getWidth() - 10, 0, 10, getHeight()};
 }
 
+juce::Rectangle<float> MixBackKnob::dialBounds() const
+{
+  // Centred in the gap between the two words, not in the component -- the
+  // words are not symmetrical about the component's middle.
+  juce::Rectangle<float> dial((float)dialSize, (float)dialSize);
+  dial.setCentre((float)(filtBounds().getRight() + powrBounds().getX()) * 0.5f,
+                 (float)getHeight() * 0.5f);
+  return dial;
+}
+
+// The gauge presents dry/wet, which is what people expect of a knob in this
+// position now. MixBack is the opposite sense, and it is a plain linear percent
+// (see docs/PARAMETERS.md), so the inversion is exact. This is the one place
+// the GUI deliberately reads differently from the host parameter, which still
+// automates as "MixBack %".
+juce::String MixBackKnob::displayText()
+{
+  return juce::String(juce::roundToInt((1.0f - param.getValue()) * 100.0f)) + "%";
+}
+
+float MixBackKnob::valueForDisplayText(const juce::String& t)
+{
+  return 1.0f - juce::jlimit(0.0f, 1.0f, t.getFloatValue() * 0.01f);
+}
+
 void MixBackKnob::mouseMove(const juce::MouseEvent& e)
 {
   const int was = wordHover;
   wordHover = filtBounds().contains(e.getPosition()) ? 0
               : powrBounds().contains(e.getPosition()) ? 1
                                                        : -1;
+
+  // The words are click targets inside a drag target, so the cursor has to say
+  // which one the pointer is actually over.
+  setMouseCursor(wordHover >= 0 ? juce::MouseCursor::PointingHandCursor
+                                : juce::MouseCursor::UpDownResizeCursor);
+
   if (was != wordHover)
     repaint();
 }
@@ -217,9 +274,10 @@ void MixBackKnob::mouseDown(const juce::MouseEvent& e)
 
 std::vector<std::pair<float, juce::String>> MixBackKnob::menuEntries()
 {
+  // The original's 0/25/50/75/100, but labelled as wet to match the readout.
   std::vector<std::pair<float, juce::String>> entries;
   for (int i = 0; i <= 100; i += 25)
-    entries.emplace_back((float)i * 0.01f, juce::String(i) + "%");
+    entries.emplace_back(1.0f - (float)i * 0.01f, juce::String(i) + "% wet");
   return entries;
 }
 
@@ -252,17 +310,13 @@ void MixBackKnob::paint(juce::Graphics& g)
 
   // The gauge. Not a rotary -- the design fills the circle from the bottom,
   // which is why there is no pointer anywhere in the Figma (node 6:468).
-  const auto side = 38.0f;
-  juce::Rectangle<float> dial(side, side);
-  dial.setCentre(getLocalBounds().getCentre().toFloat());
-
-  g.setColour(colour::bevelLight);
-  g.drawEllipse(dial.expanded(1.5f), 2.0f);
+  const auto dial = dialBounds();
 
   g.setColour(colour::bevelLight);
   g.fillEllipse(dial);
 
-  const auto value = param.getValue();
+  // Inverted, so the fill rises with wetness rather than with MixBack.
+  const auto value = 1.0f - param.getValue();
   {
     auto inner = dial.reduced(3.0f);
     juce::Path clip;
@@ -280,7 +334,7 @@ void MixBackKnob::paint(juce::Graphics& g)
   // The design prints the percentage bare, without the sign.
   g.setColour(colour::text);
   g.setFont(fonts->pixel(10.0f));
-  g.drawText(param.getCurrentValueAsText().removeCharacters("%"),
+  g.drawText(displayText().removeCharacters("%"),
              dial.toNearestInt(),
              juce::Justification::centred,
              false);
@@ -317,13 +371,19 @@ juce::String headingParamId(GlobalHeading::Which which)
 
 } // namespace
 
-GlobalHeading::GlobalHeading(DtBlkFxAudioProcessor& p, Which w)
+GlobalHeading::GlobalHeading(DtBlkFxAudioProcessor& p, Which w, LockHoverState& lh)
     : DraggableValue(*p.apvts.getParameter(headingParamId(w)),
                      juce::MouseCursor::UpDownResizeCursor)
     , processor(p)
+    , lockHover(lh)
     , which(w)
     , title(headingTitle(w))
 {
+}
+
+GlobalHeading::~GlobalHeading()
+{
+  lockHover.set(this, false);
 }
 
 int GlobalHeading::titleWidth() const
@@ -331,14 +391,23 @@ int GlobalHeading::titleWidth() const
   return fonts->heading(28.0f).getStringWidth(title);
 }
 
+juce::Rectangle<int> GlobalHeading::glyphHitArea(juce::Rectangle<int> glyph)
+{
+  // Padded, both so a 9px target is actually clickable and so the hover
+  // highlight has somewhere to sit.
+  return glyph.expanded(3);
+}
+
+// Both sit far enough from the top that glyphHitArea's 3px padding -- and so
+// the hover highlight -- stays inside the component instead of being clipped.
 juce::Rectangle<int> GlobalHeading::lockBounds() const
 {
-  return {titleWidth() + 4, 0, 9, 11};
+  return {titleWidth() + 4, 5, 9, 10};
 }
 
 juce::Rectangle<int> GlobalHeading::syncBounds() const
 {
-  return {titleWidth() + 3, 16, 11, 11};
+  return {titleWidth() + 3, 22, 11, 11};
 }
 
 bool GlobalHeading::modeIsOn() const
@@ -387,9 +456,18 @@ void GlobalHeading::toggleMode()
 void GlobalHeading::mouseMove(const juce::MouseEvent& e)
 {
   const int was = glyphHover;
-  glyphHover = lockBounds().contains(e.getPosition()) ? 0
-               : (hasSyncGlyph() && syncBounds().contains(e.getPosition())) ? 1
-                                                                            : -1;
+  glyphHover =
+      glyphHitArea(lockBounds()).contains(e.getPosition())                       ? 0
+      : (hasSyncGlyph() && glyphHitArea(syncBounds()).contains(e.getPosition())) ? 1
+                                                                                 : -1;
+
+  // Two click targets sitting inside a drag target.
+  setMouseCursor(glyphHover >= 0 ? juce::MouseCursor::PointingHandCursor
+                                 : juce::MouseCursor::UpDownResizeCursor);
+
+  // Hovering any lock outlines RANDOM, which is the only thing a lock affects.
+  lockHover.set(this, glyphHover == 0);
+
   if (was != glyphHover)
     repaint();
 }
@@ -397,19 +475,21 @@ void GlobalHeading::mouseMove(const juce::MouseEvent& e)
 void GlobalHeading::mouseExit(const juce::MouseEvent& e)
 {
   glyphHover = -1;
+  lockHover.set(this, false);
+  setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
   DraggableValue::mouseExit(e);
 }
 
 void GlobalHeading::mouseDown(const juce::MouseEvent& e)
 {
   if (!e.mods.isPopupMenu()) {
-    if (lockBounds().contains(e.getPosition())) {
+    if (glyphHitArea(lockBounds()).contains(e.getPosition())) {
       locked = !locked;
       repaint();
       return;
     }
 
-    if (hasSyncGlyph() && syncBounds().contains(e.getPosition())) {
+    if (hasSyncGlyph() && glyphHitArea(syncBounds()).contains(e.getPosition())) {
       toggleMode();
       repaint();
       return;
@@ -504,59 +584,84 @@ bool GlobalHeading::handleMenuCommand(int index)
 
 void GlobalHeading::paint(juce::Graphics& g)
 {
-  // Figma "Top Options": a 28px heading row with the 10px readout directly
-  // beneath it, both left-aligned, in a 38px block.
-  auto area = getLocalBounds();
-  auto headingArea = area.removeFromTop(28);
-
-  // The design puts a soft purple glow behind the heading. Drawn as a halo of
-  // the same text rather than a shadow pass, which at 28px is indistinguishable
-  // and far cheaper.
+  // Figma "Top Options": a 28px italic heading with the 10px readout directly
+  // beneath it. Both are drawn as paths on an explicit baseline rather than
+  // with drawText, which clips to its box -- that is what was cropping the
+  // readouts -- and cannot outline or shadow anything.
   const auto headingFont = fonts->heading(28.0f);
+  drawRaised(g, textAsPath(headingFont, title, 0.0f, headingBaseline), colour::textDim);
 
-  g.setFont(headingFont);
-  g.setColour(colour::accentGlow);
-  for (auto offset : {juce::Point<int>(-1, 0),
-                      juce::Point<int>(1, 0),
-                      juce::Point<int>(0, -1),
-                      juce::Point<int>(0, 1)})
-    g.drawText(title, headingArea + offset, juce::Justification::centredLeft, false);
-
-  g.setColour(colour::textDim);
-  g.drawText(title, headingArea, juce::Justification::centredLeft, false);
-
-  // Readout. BlkLen appends a red asterisk when the delay is capping the block
-  // size, which Phase 5 established as a user-facing signal.
-  auto readout = param.getCurrentValueAsText();
+  // The readout. BlkLen appends an asterisk when the delay is capping the block
+  // size, which Phase 5 established as a user-facing signal; it is the one part
+  // that is a different colour from the rest of the string.
+  auto readout = displayText();
   const bool capped = readout.endsWith("*");
   if (capped)
     readout = readout.dropLastCharacters(1).trimEnd();
 
-  g.setFont(fonts->pixel(10.0f));
+  const auto readoutFont = fonts->pixel(10.0f);
   g.setColour(colour::text);
-  g.drawText(readout, area, juce::Justification::centredLeft, false);
+  g.fillPath(textAsPath(readoutFont, readout, 0.0f, readoutBaseline));
 
   if (capped) {
     g.setColour(colour::warning);
-    g.drawText("*",
-               area.withX(area.getX() + g.getCurrentFont().getStringWidth(readout) + 1),
-               juce::Justification::centredLeft,
-               false);
+    g.fillPath(textAsPath(
+        readoutFont, "*", (float)readoutFont.getStringWidth(readout) + 1.0f, readoutBaseline));
   }
 
-  Glyphs::draw(g,
-               glyphs->lock(locked, true),
-               lockBounds().toFloat(),
-               glyphHover == 0 ? colour::accentBright
-                               : colour::text.withAlpha(locked ? 0.75f : 0.35f));
+  // A hovered glyph brightens the ground behind it. At 9px the glyph alone is
+  // too small to read as a hover, and there is no other affordance.
+  auto glyphAt = [&](juce::Rectangle<int> bounds, const juce::Path& path, juce::Colour fill, bool hot) {
+    if (hot) {
+      g.setColour(colour::bevelLight.withAlpha(0.55f));
+      g.fillRect(glyphHitArea(bounds));
+    }
+
+    drawRaised(g, Glyphs::scaled(path, bounds.toFloat()), fill, glyphOutline);
+  };
+
+  // Locked and unlocked are the same 60% black as the heading beside them --
+  // the open and closed padlock shapes carry the state, not the weight.
+  glyphAt(lockBounds(),
+          glyphs->lock(locked, true),
+          glyphColour(false, glyphHover == 0),
+          glyphHover == 0);
 
   if (hasSyncGlyph()) {
     const bool on = modeIsOn();
-    Glyphs::draw(g,
-                 on ? glyphs->beatSyncOn : glyphs->beatSyncOff,
-                 syncBounds().toFloat(),
-                 glyphColour(on, glyphHover == 1));
+    const auto bounds = syncBounds();
+    const auto fill = glyphColour(on, glyphHover == 1);
+    const juce::Rectangle<float> grid(Glyphs::beatSyncGrid, Glyphs::beatSyncGrid);
+
+    if (glyphHover == 1) {
+      g.setColour(colour::bevelLight.withAlpha(0.55f));
+      g.fillRect(glyphHitArea(bounds));
+    }
+
+    // Both states are placed on the same grid, so the arrows do not jump or
+    // change size as the flag is toggled.
+    drawRaised(g,
+               Glyphs::scaledFrom(on ? glyphs->beatSyncOn : glyphs->beatSyncOff,
+                                  grid,
+                                  bounds.toFloat()),
+               fill,
+               glyphOutline);
+
+    if (!on)
+      drawRaised(g, Glyphs::scaledFrom(glyphs->beatSyncCross, grid, bounds.toFloat()), fill, glyphOutline);
   }
+}
+
+juce::String GlobalHeading::displayText()
+{
+  auto text = param.getCurrentValueAsText();
+
+  // Turning sync on otherwise changes nothing visible -- the percentage stays
+  // put -- so say what happened.
+  if (which == Which::overlap && modeIsOn())
+    text += " sync";
+
+  return text;
 }
 
 //==============================================================================
@@ -642,18 +747,36 @@ void TitleBar::mouseUp(const juce::MouseEvent& e)
 }
 
 //==============================================================================
-RandomButton::RandomButton()
+RandomButton::RandomButton(LockHoverState& lh)
     : juce::Button("Randomize")
+    , lockHover(lh)
 {
+  lockHover.addChangeListener(this);
+}
+
+RandomButton::~RandomButton()
+{
+  lockHover.removeChangeListener(this);
 }
 
 void RandomButton::paintButton(juce::Graphics& g, bool highlighted, bool down)
 {
   auto bounds = getLocalBounds();
 
-  g.setColour(highlighted ? colour::baseGrey.brighter(0.08f) : colour::baseGrey);
+  // Hovering a lock anywhere outlines *and* lifts this button: randomisation is
+  // the only thing a lock affects, and nothing else on screen says so.
+  const bool lockCue = lockHover.isHovered();
+
+  g.setColour(lockCue         ? colour::baseGrey.brighter(0.35f)
+              : highlighted   ? colour::baseGrey.brighter(0.08f)
+                              : colour::baseGrey);
   g.fillRect(bounds);
   RetroLookAndFeel::drawBevel(g, bounds, !down);
+
+  if (lockCue) {
+    g.setColour(colour::accentBright);
+    g.drawRect(bounds, 2);
+  }
 
   // Rotated 180 degrees, which is deliberate -- it is how the design draws it.
   juce::Graphics::ScopedSaveState save(g);

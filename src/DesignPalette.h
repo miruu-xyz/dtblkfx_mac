@@ -26,7 +26,10 @@ namespace design {
 
 namespace colour {
 
-// Window chrome
+// Window chrome. Two greys, not one: the window ground is near-white, while
+// control faces (buttons, the help box, dropdowns) stay Win95 #C0C0C0 -- that
+// is what `help_button.svg` fills its own rect with.
+inline const juce::Colour windowBg{0xffe8eaef};
 inline const juce::Colour baseGrey{0xffc0c0c0};
 inline const juce::Colour bevelLight{0xffffffff};     // outermost highlight
 inline const juce::Colour bevelLightSoft{0xffdfdfdf}; // inner highlight
@@ -74,6 +77,8 @@ struct FontStore {
                    BinaryData::MonaspaceXenonRegular_otfSize))
       , xenonWide(load(BinaryData::MonaspaceXenonWideLight_otf,
                        BinaryData::MonaspaceXenonWideLight_otfSize))
+      , xenonWideItalic(load(BinaryData::MonaspaceXenonWideLightItalic_otf,
+                             BinaryData::MonaspaceXenonWideLightItalic_otfSize))
       , playerSans(load(BinaryData::PlayerSansMono8x8Classic_ttf,
                         BinaryData::PlayerSansMono8x8Classic_ttfSize))
   {
@@ -85,10 +90,16 @@ struct FontStore {
     return juce::Font(xenon).withPointHeight(px).withExtraKerningFactor(tracking);
   }
 
-  /** Delay / Ovrlp / BlkLen headings. Figma: 28px wide-light, tracking -0.84px. */
-  juce::Font heading(float px = 28.0f) const
+  /** Delay / Ovrlp / BlkLen headings. Figma: 28px wide-light, tracking -0.84px.
+
+      The headings are set in the italic cut. A real italic cut rather than
+      `Font::italicised`, which cannot synthesise a slant for an embedded
+      typeface -- it would silently come back upright. */
+  juce::Font heading(float px = 28.0f, bool italic = true) const
   {
-    return juce::Font(xenonWide).withPointHeight(px).withExtraKerningFactor(tracking);
+    return juce::Font(italic ? xenonWideItalic : xenonWide)
+        .withPointHeight(px)
+        .withExtraKerningFactor(tracking);
   }
 
   /** Everything small and pixelly: the title bar, FILT/POWR, the sub-readouts. */
@@ -97,7 +108,7 @@ struct FontStore {
     return juce::Font(playerSans).withPointHeight(px);
   }
 
-  juce::Typeface::Ptr xenon, xenonWide, playerSans;
+  juce::Typeface::Ptr xenon, xenonWide, xenonWideItalic, playerSans;
 
 private:
   // Both Monaspace sizes in the design are tracked at -3% of the font size.
@@ -138,10 +149,15 @@ struct Glyphs {
       , beatSyncOn(parse("M6 9H3V8H6V9ZM3 6H2V7H1V8H0V5H3V6ZM3 8H2V7H3V8ZM7 8H6V7H7V8ZM8 "
                          "7H7V5H8V7ZM2 4H1V2H2V4ZM9 4H6V3H7V2H8V1H9V4ZM3 2H2V1H3V2ZM7 "
                          "2H6V1H7V2ZM6 1H3V0H6V1Z"))
+      // The off state ships as two paths: the arrows, cut back at the lower
+      // right to make room, and the cross that goes there. Kept apart so the
+      // arrows can be placed on the same grid as the on state's -- scaling the
+      // combined shape to fit made them visibly smaller, because the cross
+      // pushes the bounding box out to 10x10 against the on state's 9x9.
       , beatSyncOff(parse("M4 9H3V8H4V9ZM3 6H2V7H1V8H0V5H3V6ZM3 8H2V7H3V8ZM2 4H1V2H2V4ZM9 "
-                          "4H6V3H7V2H8V1H9V4ZM3 2H2V1H3V2ZM7 2H6V1H7V2ZM6 1H3V0H6V1Z"
-                          "M9 5H10V6H9V5ZM5 5H6V6H5V5ZM8 6H9V7H8V6ZM6 6H7V7H6V6ZM7 7H8V8H7V7ZM8 "
-                          "8H9V9H8V8ZM6 8H7V9H6V8ZM9 9H10V10H9V9ZM5 9H6V10H5V9Z"))
+                          "4H6V3H7V2H8V1H9V4ZM3 2H2V1H3V2ZM7 2H6V1H7V2ZM6 1H3V0H6V1Z"))
+      , beatSyncCross(parse("M9 5H10V6H9V5ZM5 5H6V6H5V5ZM8 6H9V7H8V6ZM6 6H7V7H6V6ZM7 7H8V8H7V7ZM8 "
+                            "8H9V9H8V8ZM6 8H7V9H6V8ZM9 9H10V10H9V9ZM5 9H6V10H5V9Z"))
       , help(parse("M8.0625 15.1875V11.9375H11.3125V15.1875H8.0625ZM6.4375 7.0625V5.4375H8.0625V7"
                    ".0625H6.4375ZM8.0625 10.3125V8.6875H9.6875V7.0625H11.3125V5.4375H8.0625V3.812"
                    "5H12.9375V5.4375H14.5625V8.6875H12.9375V10.3125H8.0625Z"))
@@ -149,7 +165,12 @@ struct Glyphs {
   }
 
   juce::Path lockLocked, lockUnlocked, lockLockedSmall, lockUnlockedSmall;
-  juce::Path power, beatSyncOn, beatSyncOff, help;
+  juce::Path power, beatSyncOn, beatSyncOff, beatSyncCross, help;
+
+  /** Every beat-sync part is drawn on this grid. The arrows occupy 0..9 of it
+      in both states, so they land identically whichever state is showing; the
+      cross uses the last unit. */
+  static constexpr float beatSyncGrid = 10.0f;
 
   const juce::Path& lock(bool locked, bool big) const
   {
@@ -158,21 +179,95 @@ struct Glyphs {
     return locked ? lockLockedSmall : lockUnlockedSmall;
   }
 
+  /** The glyph scaled to sit centred in `target`, ready to draw or outline. */
+  static juce::Path scaled(const juce::Path& path, juce::Rectangle<float> target)
+  {
+    if (path.isEmpty())
+      return {};
+
+    auto copy = path;
+    copy.applyTransform(
+        path.getTransformToScaleToFit(target, true, juce::Justification::centred));
+    return copy;
+  }
+
+  /** As `scaled`, but mapping an explicit `source` box rather than the path's
+      own ink bounds.
+
+      Needed whenever two states of the same glyph must line up: scaling each by
+      its own bounds sizes them to their own ink, so a state that happens to
+      draw one pixel further out comes back smaller and offset. Pass both the
+      same `source` and they land on the same grid. */
+  static juce::Path
+  scaledFrom(const juce::Path& path, juce::Rectangle<float> source, juce::Rectangle<float> target)
+  {
+    if (path.isEmpty() || source.isEmpty())
+      return {};
+
+    const auto scale = juce::jmin(target.getWidth() / source.getWidth(),
+                                  target.getHeight() / source.getHeight());
+
+    auto copy = path;
+    copy.applyTransform(
+        juce::AffineTransform::translation(-source.getX(), -source.getY())
+            .scaled(scale, scale)
+            .translated(target.getCentreX() - source.getWidth() * scale * 0.5f,
+                        target.getCentreY() - source.getHeight() * scale * 0.5f));
+    return copy;
+  }
+
   /** Fill a glyph centred in `target`, scaled to fit, in `c`. */
   static void draw(juce::Graphics& g,
                    const juce::Path& path,
                    juce::Rectangle<float> target,
                    juce::Colour c)
   {
-    if (path.isEmpty())
-      return;
-
     g.setColour(c);
-    g.fillPath(path, path.getTransformToScaleToFit(target, true, juce::Justification::centred));
+    g.fillPath(scaled(path, target));
   }
 
 private:
   static juce::Path parse(const char* d) { return juce::Drawable::parseSVGPath(d); }
 };
+
+//==============================================================================
+/** `text` set as a path, so it can be outlined and shadowed. `drawText` cannot
+    do either, and it also clips to its box -- which is what was cropping the
+    header readouts. */
+inline juce::Path textAsPath(const juce::Font& font,
+                             const juce::String& text,
+                             float x,
+                             float baselineY)
+{
+  juce::GlyphArrangement arrangement;
+  arrangement.addLineOfText(font, text, x, baselineY);
+
+  juce::Path path;
+  arrangement.createPath(path);
+  return path;
+}
+
+/** The design's raised lettering: a purple glow behind, a white outline, then
+    the fill. Used for the global headings and the glyphs beside them.
+
+    `outline` has to scale with the artwork. The headings are 28px and take a
+    1.2px edge happily; the glyphs beside them are 9px, where the same edge
+    closes up the counters and turns a padlock into a blob. */
+inline void
+drawRaised(juce::Graphics& g, const juce::Path& path, juce::Colour fill, float outline = 1.2f)
+{
+  if (path.isEmpty())
+    return;
+
+  juce::DropShadow(colour::accentBright.withAlpha(0.6f), 4, {0, 1}).drawForPath(g, path);
+
+  g.setColour(colour::bevelLight);
+  g.strokePath(
+      path,
+      juce::PathStrokeType(outline, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+  g.setColour(fill);
+  g.fillPath(path);
+}
 
 } // namespace design

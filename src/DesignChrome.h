@@ -19,10 +19,42 @@
 #include "DesignPalette.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <set>
 
 class DtBlkFxAudioProcessor;
 
 namespace design {
+
+//==============================================================================
+/** "Is the pointer over a lock anywhere in the window?"
+
+    The RANDOM button outlines itself while this is true, so hovering any lock
+    shows what locking is actually for. Sources register themselves by address
+    rather than by a plain bool, because several locks are hovered and unhovered
+    independently and the last one to report must not clear the others.
+
+    Owned by the editor -- one per editor instance, never a global, since a host
+    can have several windows open on different instances.
+*/
+class LockHoverState : public juce::ChangeBroadcaster {
+public:
+  void set(const void* source, bool hovered)
+  {
+    const bool was = isHovered();
+    if (hovered)
+      sources.insert(source);
+    else
+      sources.erase(source);
+
+    if (was != isHovered())
+      sendChangeMessage();
+  }
+
+  bool isHovered() const noexcept { return !sources.empty(); }
+
+private:
+  std::set<const void*> sources;
+};
 
 //==============================================================================
 /** Shared drag/menu/type behaviour for the header controls.
@@ -55,6 +87,16 @@ protected:
       Returns true if handled. */
   virtual bool handleMenuCommand(int /*index*/) { return false; }
 
+  /** What the control reads, and the inverse for typed entry. The MixBack
+      gauge overrides both so it can present itself as dry/wet, which is the
+      one place the GUI deliberately disagrees with the host parameter. */
+  virtual juce::String displayText() { return param.getCurrentValueAsText(); }
+  virtual float valueForDisplayText(const juce::String& t) { return param.getValueForText(t); }
+
+  /** +1 for a control where dragging up increases the parameter, -1 where it
+      decreases it because the readout is inverted. */
+  virtual float dragSign() const { return 1.0f; }
+
   juce::RangedAudioParameter& param;
 
 private:
@@ -77,6 +119,8 @@ class MixBackKnob : public DraggableValue {
 public:
   explicit MixBackKnob(DtBlkFxAudioProcessor& p);
 
+  static constexpr int dialSize = 38;
+
   void paint(juce::Graphics& g) override;
   void mouseDown(const juce::MouseEvent& e) override;
   void mouseMove(const juce::MouseEvent& e) override;
@@ -85,7 +129,13 @@ public:
 protected:
   std::vector<std::pair<float, juce::String>> menuEntries() override;
 
+  // The gauge reads dry/wet, i.e. the inverse of the MixBack parameter.
+  juce::String displayText() override;
+  float valueForDisplayText(const juce::String& t) override;
+  float dragSign() const override { return -1.0f; }
+
 private:
+  juce::Rectangle<float> dialBounds() const;
   juce::Rectangle<int> filtBounds() const;
   juce::Rectangle<int> powrBounds() const;
 
@@ -104,7 +154,8 @@ class GlobalHeading : public DraggableValue {
 public:
   enum class Which { delay, overlap, blkLen };
 
-  GlobalHeading(DtBlkFxAudioProcessor& p, Which which);
+  GlobalHeading(DtBlkFxAudioProcessor& p, Which which, LockHoverState& lockHover);
+  ~GlobalHeading() override;
 
   void paint(juce::Graphics& g) override;
   void mouseDown(const juce::MouseEvent& e) override;
@@ -117,8 +168,18 @@ protected:
   std::vector<std::pair<float, juce::String>> menuEntries() override;
   bool handleMenuCommand(int index) override;
 
+  /** Overlap appends " sync" when the flag is on, because turning it on
+      otherwise changes nothing the user can see. */
+  juce::String displayText() override;
+
 private:
+  // Baselines rather than boxes: the 28px heading's ascenders and descenders
+  // do not fit a 28px box, and drawText clips to it.
+  static constexpr float headingBaseline = 26.0f;
+  static constexpr float readoutBaseline = 42.0f;
+
   int titleWidth() const;
+  static juce::Rectangle<int> glyphHitArea(juce::Rectangle<int> glyph);
   juce::Rectangle<int> lockBounds() const;
   juce::Rectangle<int> syncBounds() const;
   bool hasSyncGlyph() const { return which != Which::blkLen; }
@@ -130,6 +191,7 @@ private:
   bool modeIsOn() const;
 
   DtBlkFxAudioProcessor& processor;
+  LockHoverState& lockHover;
   Which which;
   juce::String title;
   juce::SharedResourcePointer<FontStore> fonts;
@@ -161,12 +223,19 @@ private:
 
 //==============================================================================
 /** The RANDOM button. Its label is rotated 180 degrees, which is deliberate. */
-class RandomButton : public juce::Button {
+class RandomButton
+    : public juce::Button
+    , private juce::ChangeListener {
 public:
-  RandomButton();
+  explicit RandomButton(LockHoverState& lockHover);
+  ~RandomButton() override;
+
   void paintButton(juce::Graphics& g, bool highlighted, bool down) override;
 
 private:
+  void changeListenerCallback(juce::ChangeBroadcaster*) override { repaint(); }
+
+  LockHoverState& lockHover;
   juce::SharedResourcePointer<FontStore> fonts;
 };
 

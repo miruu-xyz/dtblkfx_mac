@@ -15,7 +15,7 @@ class DtBlkFxAudioProcessor;
     itself -- see src/DesignChrome.h. */
 class HeaderComponent : public juce::Component {
 public:
-  explicit HeaderComponent(DtBlkFxAudioProcessor& p);
+  HeaderComponent(DtBlkFxAudioProcessor& p, design::LockHoverState& lockHover);
 
   void resized() override;
 
@@ -36,9 +36,17 @@ private:
 //==============================================================================
 class ParameterRowComponent : public juce::Component {
 public:
-  ParameterRowComponent(DtBlkFxAudioProcessor& p, int index);
+  ParameterRowComponent(DtBlkFxAudioProcessor& p, int index, design::LockHoverState& lockHover);
+  ~ParameterRowComponent() override;
+
   void paint(juce::Graphics& g) override;
   void resized() override;
+
+  // Reports the row's lock to the shared hover signal, so hovering it outlines
+  // RANDOM like the header locks do. 6.3 replaces this button with the design's
+  // glyph, which will report directly.
+  void mouseEnter(const juce::MouseEvent& e) override;
+  void mouseExit(const juce::MouseEvent& e) override;
 
   bool isLocked() const { return lockButton.getToggleState(); }
 
@@ -51,6 +59,7 @@ public:
 
 private:
   DtBlkFxAudioProcessor& processor;
+  design::LockHoverState& lockHover;
   int rowIndex;
   juce::Slider freqASlider, freqBSlider, ampSlider, valSlider, valFineSlider;
   juce::ComboBox typeBox;
@@ -126,6 +135,9 @@ public:
 
 private:
   DtBlkFxAudioProcessor& audioProcessor;
+
+  // Declared before `header` and `footer`: both take a reference to it.
+  design::LockHoverState lockHover;
 
   // Owns the in-flight chooser so it survives past savePreset()/loadPreset()
   // returning -- launchAsync's callback fires later, on the message thread.

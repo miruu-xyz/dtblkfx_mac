@@ -87,6 +87,15 @@ public:
 
   juce::Font getPopupMenuFont() override { return fonts->value(15.0f); }
 
+  void drawPopupMenuBackground(juce::Graphics& g, int width, int height) override
+  {
+    // The design's dropdown is a plain white box with a thin grey edge -- no
+    // rounding, no shadow, which is what LookAndFeel_V4 would give it.
+    g.fillAll(design::colour::bevelLight);
+    g.setColour(design::colour::bevelDarkSoft);
+    g.drawRect(0, 0, width, height, 1);
+  }
+
   juce::Font getTextButtonFont(juce::TextButton&, int buttonHeight) override
   {
     return fonts->pixel(juce::jmin(11.0f, buttonHeight * 0.5f));

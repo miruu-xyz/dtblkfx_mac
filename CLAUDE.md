@@ -124,7 +124,13 @@ Things in this codebase that have already cost time, or are waiting to:
   `textFromValueFunction` at its `RangedAudioParameter`, so the GUI and the host
   cannot disagree. Hand-rolling it is how the amp knob ended up stuck on dB
   while the host correctly switched to a mix percentage. Slider ranges that are
-  not 0..1 pass a mapping pair.
+  not 0..1 pass a mapping pair. **One deliberate exception, added in Phase
+  6.2:** the header gauge presents dry/wet, i.e. `1 - mixBack`, because that is
+  what a knob in that position is expected to mean now. The host parameter is
+  still `MixBack %`. The inversion is exact -- `mixBack` is a plain linear
+  percent -- and it lives in `MixBackKnob::displayText` /
+  `valueForDisplayText`, which the drag direction, the menu labels and typed
+  entry all route through, so nothing inside the GUI can disagree with itself.
 - **Two engine display functions ignore the value you pass them.**
   `getParamDisplayGlobal`'s `FFT_LEN` branch calls `guessFFTLen()`, which reads
   the engine's own fft-len param, and `FxState1_0::getParamDisplay`'s `FX_TYPE`

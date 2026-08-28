@@ -146,6 +146,7 @@ juce_add_binary_data(DtBlkFxAssets SOURCES
     dtblkfx_src/dtblkfx_logo.png
     assets/fonts/MonaspaceXenonRegular.otf
     assets/fonts/MonaspaceXenonWideLight.otf
+    assets/fonts/MonaspaceXenonWideLightItalic.otf
     assets/fonts/PlayerSansMono8x8Classic.ttf)
 
 target_sources(DtBlkFx PRIVATE
