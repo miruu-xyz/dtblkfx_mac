@@ -101,10 +101,7 @@ public:
     g.setFont(fonts->pixel(10.0f));
     g.drawText(label, getLocalBounds().reduced(7), juce::Justification::topRight, true);
 
-    // Grid. The design draws no centre line, but it is useful while the
-    // frequency mapping is still the old linear one -- revisit in 6.7.
-    g.setColour(design::colour::bevelLight.withAlpha(0.3f));
-    g.drawLine(0, h / 2.0f, (float)w, h / 2.0f);
+    juce::ignoreUnused(w, h);
   }
 
   void resized() override

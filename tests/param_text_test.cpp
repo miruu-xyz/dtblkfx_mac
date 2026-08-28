@@ -86,8 +86,42 @@ struct FixedTempoPlayHead : juce::AudioPlayHead {
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+  // `--shot <file.png>` renders the editor offscreen to a PNG instead of running
+  // the checks. The GUI phases need a way to see the window without launching
+  // the Standalone, which opens the default audio input *and* output and can
+  // feed back through monitors (see CLAUDE.md).
+  if (argc == 3 && juce::String(argv[1]) == "--shot") {
+    juce::ScopedJuceInitialiser_GUI gui;
+
+    DtBlkFxAudioProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    std::unique_ptr<juce::AudioProcessorEditor> editor(processor.createEditor());
+    if (editor == nullptr) {
+      std::printf("no editor\n");
+      return 1;
+    }
+
+    const juce::File out(juce::File::getCurrentWorkingDirectory().getChildFile(argv[2]));
+    const auto image = editor->createComponentSnapshot(editor->getLocalBounds(), true);
+
+    out.deleteFile();
+    juce::FileOutputStream stream(out);
+    juce::PNGImageFormat png;
+    if (!stream.openedOk() || !png.writeImageToStream(image, stream)) {
+      std::printf("could not write %s\n", out.getFullPathName().toRawUTF8());
+      return 1;
+    }
+
+    std::printf("wrote %s (%dx%d)\n",
+                out.getFullPathName().toRawUTF8(),
+                image.getWidth(),
+                image.getHeight());
+    return 0;
+  }
+
   using namespace BlkFxParam;
   juce::ScopedJuceInitialiser_GUI juceInit;
 

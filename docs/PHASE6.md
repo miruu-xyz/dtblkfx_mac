@@ -69,7 +69,7 @@ fixed first.
 
 Done. See "What 6.1 landed" below.
 
-### 6.2 — Chrome and shell
+### 6.2 — Chrome and shell ✅
 
 The Win95 title bar (gradient, `?` help button), the outer 652 × 912 frame and
 bevel, the footer (Presets dropdown, RANDOM button), and the header row: the
@@ -106,6 +106,8 @@ the window read correctly.
   button's 180-degree rotation is deliberate.
 - **Full Win95 hover and press feedback**: everything bevels inward on press,
   glyphs brighten toward `#A83FF8` on hover.
+
+Done. See "What 6.2 landed" below.
 
 ### 6.3 — The FX row, static
 
@@ -149,6 +151,17 @@ spectrogram is a control surface and dragging on it sets a row's frequency
 range — that is in `dtblkfx_src/Spectrogram.cpp`, not in the Figma, so it needs
 a scope decision.
 
+## Seeing the GUI without a DAW
+
+```bash
+./build/dtblkfx_paramtext --shot window.png
+```
+
+Renders the real editor offscreen to a PNG. The Standalone build must not be
+launched unattended -- JUCE's wrapper opens the default audio input *and*
+output and can feed back through monitors (CLAUDE.md) -- and this is the
+substitute. With no arguments the same binary still runs the parameter checks.
+
 ## Open questions
 
 - **Resizing.** The window is fixed at 652 x 912 through 6.7. The Figma is
@@ -157,6 +170,50 @@ a scope decision.
   rewrite.
 - **Spectrogram-as-control-surface** (6.7) is not in the Figma and needs a
   scope decision.
+
+## What 6.2 landed
+
+`src/DesignChrome.h/.cpp` -- the window furniture, kept out of
+`DtBlkFxEditor.cpp` because 6.3 rewrites the FX row in that file and the two
+diffs should not collide.
+
+- `DraggableValue` -- the shared behaviour behind every global control: drag
+  either axis, right-click for a menu of named values, double-click to type.
+  This is what `DtPopupHSlider` did in the original.
+- `MixBackKnob` -- **not a rotary.** The Figma export makes it a circle with a
+  purple level rising from the bottom (a 32px circle mask over a rect), which is
+  why there is no pointer anywhere in the design. FILT and POWR are set
+  vertically either side and are the `power` boolean; clicking one *selects*
+  that mode rather than toggling, so the click always does what the word says.
+- `GlobalHeading` -- Delay / Ovrlp / BlkLen. The lock and beat-sync glyphs
+  anchor to the right edge of the heading *text*, not of the component, which is
+  how the design positions them. The readout renders the BlkLen asterisk in
+  `#D20000`.
+- `TitleBar` and `RandomButton`.
+- The four menus are ported verbatim from `GlobalCtrl.cpp`, including the
+  tempo-dependent rebuild. **Delay's first entry swaps beats/msec by
+  recomputing the parameter so the delay keeps the same length** -- flipping the
+  flag alone would jump the time, because the fractional part means something
+  different either side of it.
+- Glyphs live in `design::Glyphs` as the exact path data from the Figma export,
+  fed through `juce::Drawable::parseSVGPath`. Not embedded SVG: the colour is a
+  state and has to be set at paint time, and `help_button.svg` carries its Win95
+  edge as an SVG inner-shadow filter that JUCE's parser does not implement.
+- Window is 652 x 912, laid out by removing bands from the top rather than by
+  absolute coordinates, so resizing later is a matter of changing band sizes.
+- Out of the layout, code retained: the limiter panel, the smooth slider, the
+  logo. The two placeholder "Factory" presets are gone.
+
+Two crash risks were closed while writing this, both specific to plug-ins: the
+host can close the editor while a `showMenuAsync` menu is still up, and a
+`TextEditor` must not be deleted from inside its own focus-lost callback. Both
+now go through `Component::SafePointer`.
+
+Guardrails after: `check_audio.sh` 71/71, `dtblkfx_paramtext` all passed.
+
+**Still wrong on screen after 6.2, by design:** the FX rows are the old
+sliders-and-knobs squeezed into the design's 40px lanes, and the spectrograms
+are still on the old linear frequency mapping. 6.3 and 6.7.
 
 ## What 6.1 landed
 

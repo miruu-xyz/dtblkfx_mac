@@ -31,257 +31,51 @@ void useParamText(juce::Slider& s,
 } // namespace
 
 //==============================================================================
-HeaderComponent::HeaderComponent(juce::AudioProcessorValueTreeState& apvts)
-    : apvts(apvts)
+HeaderComponent::HeaderComponent(DtBlkFxAudioProcessor& p)
+    : knob(p)
+    , delayHeading(p, design::GlobalHeading::Which::delay)
+    , overlapHeading(p, design::GlobalHeading::Which::overlap)
+    , blkLenHeading(p, design::GlobalHeading::Which::blkLen)
 {
-  logo = juce::ImageCache::getFromMemory(BinaryData::dtblkfx_logo_png,
-                                         BinaryData::dtblkfx_logo_pngSize);
-  setLookAndFeel(&retroLnF);
-
-  auto setupTopSlider = [&](juce::Slider& s) {
-    addAndMakeVisible(s);
-    s.setSliderStyle(juce::Slider::LinearHorizontal);
-    s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 15);
-  };
-
-  // Mix & Power Match
-  setupTopSlider(mixSlider);
-  mixSlider.setRange(0.0, 1.0, 0.01);
-  mixSlider.onValueChange = [this] { updateMixParam(); };
-
-  // Delay
-  setupTopSlider(delaySlider);
-  delaySlider.setRange(0.0, 10.0, 0.01);
-  delaySlider.onValueChange = [this] { updateDelayParam(); };
-
-  // FFT Len
-  setupTopSlider(fftLenSlider);
-  fftLenSlider.setRange(0.0, 1.0, 0.01);
-  fftLenSlider.onValueChange = [this] { updateFFTLenParam(); };
-
-  // Overlap
-  setupTopSlider(overlapSlider);
-  overlapSlider.setRange(0.0, 10.0, 0.1);
-  overlapSlider.onValueChange = [this] { updateOverlapParam(); };
-
-  // Sync Button
-  addAndMakeVisible(syncButton);
-  syncButton.setButtonText("Sync");
-  syncButton.onClick = [this] { updateOverlapParam(); };
-
-  // Labels
-  auto addLabel = [this](juce::Label& l, const juce::String& text) {
-    addAndMakeVisible(l);
-    l.setText(text, juce::dontSendNotification);
-    l.setFont(retroLnF.fonts->pixel(10.0f));
-    l.setJustificationType(juce::Justification::centred);
-  };
-
-  // Readouts. The mix slider runs "wet", i.e. the inverse of MixBack, and the
-  // delay and overlap sliders run 0..10 over the parameter's 0..1.
-  useParamText(
-      mixSlider,
-      apvts,
-      DtBlkFxAudioProcessor::mixBackId,
-      [](double v) { return 1.0 - v; },
-      [](double v) { return 1.0 - v; });
-  useParamText(delaySlider,
-               apvts,
-               DtBlkFxAudioProcessor::paramId(BlkFxParam::DELAY),
-               [](double v) { return v * 0.1; },
-               [](double v) { return v * 10.0; });
-  useParamText(fftLenSlider, apvts, DtBlkFxAudioProcessor::paramId(BlkFxParam::FFT_LEN));
-  useParamText(overlapSlider,
-               apvts,
-               DtBlkFxAudioProcessor::overlapId,
-               [](double v) { return v * 0.1; },
-               [](double v) { return v * 10.0; });
-
-  addLabel(mixLabel, "Dry/Wet");
-  addLabel(delayLabel, "Delay");
-  addLabel(fftLenLabel, "BlkLen");
-  addLabel(overlapLabel, "Overlap");
-
-  // Locks
-  auto setupLock = [this](juce::ToggleButton& b) {
-    addAndMakeVisible(b);
-    b.setButtonText("Lock");
-  };
-
-  setupLock(mixLock);
-  setupLock(delayLock);
-  setupLock(fftLock);
-  setupLock(overlapLock);
-
-  // Register listener. MixBack and Overlap are no longer packed params -- see
-  // DtBlkFxProcessor.h -- so the header talks to their halves directly.
-  for (auto* id : {DtBlkFxAudioProcessor::mixBackId,
-                   "param_1", // Delay
-                   "param_2", // BlkLen
-                   DtBlkFxAudioProcessor::overlapId,
-                   DtBlkFxAudioProcessor::syncId}) {
-    apvts.addParameterListener(id, this);
-    parameterChanged(id, *apvts.getRawParameterValue(id));
-  }
-}
-
-HeaderComponent::~HeaderComponent()
-{
-  for (auto* id : {DtBlkFxAudioProcessor::mixBackId,
-                   "param_1",
-                   "param_2",
-                   DtBlkFxAudioProcessor::overlapId,
-                   DtBlkFxAudioProcessor::syncId})
-    apvts.removeParameterListener(id, this);
-  setLookAndFeel(nullptr);
+  for (auto* c : {(juce::Component*)&knob,
+                  (juce::Component*)&delayHeading,
+                  (juce::Component*)&overlapHeading,
+                  (juce::Component*)&blkLenHeading})
+    addAndMakeVisible(c);
 }
 
 bool HeaderComponent::isLocked(int index) const
 {
   switch (index) {
-    case 0:
-      return mixLock.getToggleState();
     case 1:
-      return delayLock.getToggleState();
+      return delayHeading.isLocked();
     case 2:
-      return fftLock.getToggleState();
+      return blkLenHeading.isLocked();
     case 3:
-      return overlapLock.getToggleState();
+      return overlapHeading.isLocked();
     default:
       return false;
   }
 }
 
-void HeaderComponent::parameterChanged(const juce::String& parameterID, float newValue)
-{
-  if (parameterID == DtBlkFxAudioProcessor::mixBackId) {
-    juce::MessageManager::callAsync([this, newValue] {
-      mixSlider.setValue(1.0f - newValue, juce::dontSendNotification);
-    });
-  }
-  else if (parameterID == "param_1") // Delay
-  {
-    float val = newValue * 10.0f;
-    juce::MessageManager::callAsync(
-        [this, val] { delaySlider.setValue(val, juce::dontSendNotification); });
-  }
-  else if (parameterID == "param_2") // FFT Len
-  {
-    juce::MessageManager::callAsync(
-        [this, newValue] { fftLenSlider.setValue(newValue, juce::dontSendNotification); });
-  }
-  else if (parameterID == DtBlkFxAudioProcessor::overlapId) {
-    juce::MessageManager::callAsync(
-        [this, newValue] { overlapSlider.setValue(newValue * 10.0f, juce::dontSendNotification); });
-  }
-  else if (parameterID == DtBlkFxAudioProcessor::syncId) {
-    juce::MessageManager::callAsync([this, newValue] {
-      syncButton.setToggleState(newValue >= 0.5f, juce::dontSendNotification);
-    });
-  }
-}
-
-void HeaderComponent::updateMixParam()
-{
-  if (auto* param = apvts.getParameter(DtBlkFxAudioProcessor::mixBackId))
-    param->setValueNotifyingHost(1.0f - (float)mixSlider.getValue());
-}
-
-void HeaderComponent::updateDelayParam()
-{
-  float val = (float)delaySlider.getValue() / 10.0f;
-  auto* param = apvts.getParameter("param_1");
-  if (param)
-    param->setValueNotifyingHost(val);
-}
-
-void HeaderComponent::updateFFTLenParam()
-{
-  float val = (float)fftLenSlider.getValue();
-  auto* param = apvts.getParameter("param_2");
-  if (param)
-    param->setValueNotifyingHost(val);
-}
-
-void HeaderComponent::updateOverlapParam()
-{
-  if (auto* param = apvts.getParameter(DtBlkFxAudioProcessor::overlapId))
-    param->setValueNotifyingHost((float)overlapSlider.getValue() / 10.0f);
-  if (auto* param = apvts.getParameter(DtBlkFxAudioProcessor::syncId))
-    param->setValueNotifyingHost(syncButton.getToggleState() ? 1.0f : 0.0f);
-}
-
-void HeaderComponent::refreshTexts()
-{
-  // BlkLen and Overlap both read something derived from the block length,
-  // which Delay caps -- so moving one changes the text under another.
-  for (auto* s : {&mixSlider, &delaySlider, &fftLenSlider, &overlapSlider})
-    s->updateText();
-}
-
-void HeaderComponent::paint(juce::Graphics& g)
-{
-  g.fillAll(design::colour::baseGrey);
-
-  if (logo.isValid()) {
-    int logoH = 60;
-    int logoW = logo.getWidth() * logoH / logo.getHeight();
-    int logoX = (getWidth() - logoW) / 2;
-    g.drawImage(logo, logoX, 10, logoW, logoH, 0, 0, logo.getWidth(), logo.getHeight());
-  }
-  else {
-    g.setColour(design::colour::warning);
-    g.drawRect((getWidth() - 100) / 2, 10, 100, 60, 2);
-    g.drawText(
-        "LOGO MISSING", (getWidth() - 100) / 2, 10, 100, 60, juce::Justification::centred, false);
-  }
-}
-
 void HeaderComponent::resized()
 {
-  // Layout
-  auto area = getLocalBounds().reduced(5);
+  // Figma node 6:464: the gauge block is 86 wide on the left, then the three
+  // headings, spread. BlkLen is wider than the other two because its readout
+  // is the longest string in the row.
+  // Widths are the design's; the row is space-between, so whatever is left
+  // over after them is split evenly into the three gaps.
+  auto area = getLocalBounds();
+  const int widths[]{86, 124, 124, 145};
+  const int gap = juce::jmax(0, (area.getWidth() - (widths[0] + widths[1] + widths[2] + widths[3])) / 3);
 
-  // Reserve space for logo
-  area.removeFromTop(80); // Logo height (60) + padding (20)
+  knob.setBounds(area.removeFromLeft(widths[0]));
 
-  int w = area.getWidth() / 4;
-
-  auto layoutCol = [&](int col,
-                       juce::Label& label,
-                       juce::Slider& slider,
-                       juce::ToggleButton& lock) {
-    auto r = area.withX(area.getX() + col * w).withWidth(w).reduced(5, 0);
-    label.setBounds(r.removeFromTop(20));
-    slider.setBounds(r.removeFromTop(30)); // Slider height
-
-    // Center the lock button
-    auto lockArea = r.removeFromTop(24);
-    lock.setBounds(lockArea.withWidth(60).withX(lockArea.getX() + (lockArea.getWidth() - 60) / 2));
-  };
-
-  layoutCol(0, mixLabel, mixSlider, mixLock);
-  layoutCol(1, delayLabel, delaySlider, delayLock);
-
-  // Custom layout for Overlap to include Sync button
-  {
-    int col = 2;
-    auto r = area.withX(area.getX() + col * w).withWidth(w).reduced(5, 0);
-    overlapLabel.setBounds(r.removeFromTop(20));
-    overlapSlider.setBounds(r.removeFromTop(30));
-
-    auto bottomArea = r.removeFromTop(24);
-    int buttonWidth = 50;
-    int spacing = 10;
-    int totalWidth = buttonWidth * 2 + spacing;
-    int startX = bottomArea.getX() + (bottomArea.getWidth() - totalWidth) / 2;
-
-    syncButton.setBounds(startX, bottomArea.getY(), buttonWidth, bottomArea.getHeight());
-    overlapLock.setBounds(
-        startX + buttonWidth + spacing, bottomArea.getY(), buttonWidth, bottomArea.getHeight());
+  juce::Component* headings[]{&delayHeading, &overlapHeading, &blkLenHeading};
+  for (int i = 0; i < 3; ++i) {
+    area.removeFromLeft(gap);
+    headings[i]->setBounds(area.removeFromLeft(widths[i + 1]).withHeight(38));
   }
-
-  layoutCol(3, fftLenLabel, fftLenSlider, fftLock);
 }
 
 //==============================================================================
@@ -620,22 +414,22 @@ DtBlkFxEditor::FooterComponent::FooterComponent(DtBlkFxEditor& e)
   addAndMakeVisible(randomizeButton);
   randomizeButton.onClick = [&] { owner.startRandomization(); };
 
-  addAndMakeVisible(smoothSlider);
+  // The smooth slider and the limiter are not in the design (docs/PHASE6.md,
+  // 6.2). They stay constructed and wired so they can be re-added later --
+  // they are simply not made visible or given bounds.
   smoothSlider.setSliderStyle(juce::Slider::LinearHorizontal);
   smoothSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 15);
   smoothSlider.setRange(0.0, 10.0, 0.1);
   smoothSlider.setValue(1.0); // Default 1s
   smoothSlider.setTooltip("Interpolation Time (s)");
 
-  addAndMakeVisible(smoothLabel);
   smoothLabel.setText("Smooth (s):", juce::dontSendNotification);
-  smoothLabel.attachToComponent(&smoothSlider, true);
 
   addAndMakeVisible(presetBox);
+  // The two "Factory" entries were placeholders implying a bank we do not have
+  // yet; the original's 43 presets arrive in Phase 8.
   presetBox.addItem("Init", 1);
   presetBox.addItem("Random", 2);
-  presetBox.addItem("Factory: Vocoder", 3);
-  presetBox.addItem("Factory: Rhythmic", 4);
   presetBox.addSeparator();
   presetBox.addItem("Save Preset...", 100);
   presetBox.addItem("Load Preset...", 101);
@@ -647,10 +441,6 @@ DtBlkFxEditor::FooterComponent::FooterComponent(DtBlkFxEditor& e)
       owner.loadFactoryPreset(0); // Init
     else if (id == 2)
       owner.startRandomization(); // Random
-    else if (id == 3)
-      owner.loadFactoryPreset(1); // Vocoder
-    else if (id == 4)
-      owner.loadFactoryPreset(2); // Rhythmic
     else if (id == 100)
       owner.savePreset();
     else if (id == 101)
@@ -663,26 +453,14 @@ DtBlkFxEditor::FooterComponent::FooterComponent(DtBlkFxEditor& e)
 void DtBlkFxEditor::FooterComponent::paint(juce::Graphics& g)
 {
   g.fillAll(design::colour::baseGrey);
-  g.setColour(design::colour::bevelDarkSoft);
-  g.drawLine(0, 0, (float)getWidth(), 0, 1.0f);
 }
 
 void DtBlkFxEditor::FooterComponent::resized()
 {
-  auto area = getLocalBounds().reduced(10);
-
-  // Presets on the left
-  presetBox.setBounds(area.removeFromLeft(120).withHeight(24));
-
-  // Randomize on the right
-  randomizeButton.setBounds(area.removeFromRight(100).withHeight(24));
-
-  // Smooth slider in the middle, but ensure space for the attached label
-  // Label is attached to the left, so we need to leave a gap.
-  area.removeFromLeft(80);  // Gap for "Smooth (s):" label
-  area.removeFromRight(20); // Gap before Randomize
-
-  smoothSlider.setBounds(area.withHeight(24));
+  // Figma node 6:673: presets 128x26 inset 9 from the left, RANDOM 97x23 inset
+  // 9 from the right, both centred vertically in the 44px strip.
+  presetBox.setBounds(9, (getHeight() - 26) / 2, 128, 26);
+  randomizeButton.setBounds(getWidth() - 9 - 97, (getHeight() - 23) / 2, 97, 23);
 }
 
 //==============================================================================
@@ -853,7 +631,7 @@ void DtBlkFxEditor::loadFactoryPreset(int index)
 DtBlkFxEditor::DtBlkFxEditor(DtBlkFxAudioProcessor& p)
     : AudioProcessorEditor(&p)
     , audioProcessor(p)
-    , header(p.apvts)
+    , header(p)
     , inputSpectrogram("Input Left")
     , outputSpectrogram("Output Left")
     , footer(*this)
@@ -861,11 +639,13 @@ DtBlkFxEditor::DtBlkFxEditor(DtBlkFxAudioProcessor& p)
 {
   setLookAndFeel(&retroLnF);
 
+  addAndMakeVisible(titleBar);
   addAndMakeVisible(header);
   addAndMakeVisible(inputSpectrogram);
   addAndMakeVisible(outputSpectrogram);
   addAndMakeVisible(footer);
-  addAndMakeVisible(limiter);
+  // `limiter` stays constructed and attached to its parameters, but the design
+  // has no panel for it -- see docs/PHASE6.md, 6.2.
 
   // Channel Selectors Removed
   inputSpectrogram.setLabel("Input L+R");
@@ -877,8 +657,7 @@ DtBlkFxEditor::DtBlkFxEditor(DtBlkFxAudioProcessor& p)
     paramRows.push_back(std::move(row));
   }
 
-  // Increased height to fit all rows + limiter
-  setSize(600, 1040); // 960 + 80 for limiter
+  setSize(windowWidth, windowHeight);
   startTimerHz(60);
 }
 
@@ -922,31 +701,34 @@ void DtBlkFxEditor::timerCallback()
 void DtBlkFxEditor::paint(juce::Graphics& g)
 {
   g.fillAll(design::colour::baseGrey);
+  RetroLookAndFeel::drawBevel(g, getLocalBounds(), true);
 }
 
 void DtBlkFxEditor::resized()
 {
+  // Geometry straight off Figma node 6-669. Laid out by removing bands from the
+  // top rather than by absolute coordinates, so that making the window
+  // resizable after 6.7 is a matter of changing the band sizes, not rewriting
+  // this.
   auto area = getLocalBounds();
 
-  header.setBounds(area.removeFromTop(165)); // Increased header height for logo + locks
+  titleBar.setBounds(area.removeFromTop(36).reduced(4));
 
-  // Limiter at the very bottom
-  limiter.setBounds(area.removeFromBottom(80));
+  area.removeFromTop(26);
+  auto content = area.withTrimmedLeft(6).withTrimmedRight(6);
 
-  footer.setBounds(area.removeFromBottom(60));
+  header.setBounds(content.removeFromTop(40));
+  content.removeFromTop(26);
 
-  int specHeight = 80;                                     // Shortened spectrograms
-  auto specArea = area.removeFromTop(specHeight * 2 + 10); // Reduced padding
+  inputSpectrogram.setBounds(content.removeFromTop(177));
+  content.removeFromTop(3);
+  outputSpectrogram.setBounds(content.removeFromTop(177));
+  content.removeFromTop(8);
 
-  // inputChannelSelector removed
-  inputSpectrogram.setBounds(specArea.removeFromTop(specHeight));
-  specArea.removeFromTop(10); // Spacing
-
-  // outputChannelSelector removed
-  outputSpectrogram.setBounds(specArea.removeFromTop(specHeight));
-
-  int rowHeight = 70; // Reduced row height
   for (auto& row : paramRows) {
-    row->setBounds(area.removeFromTop(rowHeight));
+    row->setBounds(content.removeFromTop(40));
+    content.removeFromTop(3);
   }
+
+  footer.setBounds(content.removeFromTop(44));
 }

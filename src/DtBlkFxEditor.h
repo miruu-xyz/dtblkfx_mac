@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DtBlkFxProcessor.h"
+#include "DesignChrome.h"
 #include "SpectrogramComponent.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -9,43 +10,27 @@ class DtBlkFxAudioProcessor;
 #include "RetroLookAndFeel.h"
 
 //==============================================================================
-class HeaderComponent
-    : public juce::Component
-    , public juce::AudioProcessorValueTreeState::Listener {
+/** The global header row (Figma node 6:464): the MixBack gauge with its
+    FILT/POWR words, then Delay, Ovrlp and BlkLen. Every control in it paints
+    itself -- see src/DesignChrome.h. */
+class HeaderComponent : public juce::Component {
 public:
-  HeaderComponent(juce::AudioProcessorValueTreeState& apvts);
-  ~HeaderComponent() override;
+  explicit HeaderComponent(DtBlkFxAudioProcessor& p);
 
-  void paint(juce::Graphics& g) override;
   void resized() override;
 
-  // Listener callback
-  void parameterChanged(const juce::String& parameterID, float newValue) override;
-
+  /** Lock state for randomisation, indexed the way startRandomization() groups
+      the globals: 0 mixback/power, 1 delay, 2 blklen, 3 overlap/sync. The
+      design gives the gauge no lock, so 0 is never locked. */
   bool isLocked(int index) const;
 
-  // Re-read every slider's text from its parameter.
-  void refreshTexts();
+  /** The headings read straight from their parameters when they paint, so a
+      refresh is just a repaint. */
+  void refreshTexts() { repaint(); }
 
 private:
-  juce::AudioProcessorValueTreeState& apvts;
-
-  juce::Slider mixSlider, delaySlider, overlapSlider, fftLenSlider;
-  juce::ToggleButton powerMatchButton, syncButton;
-
-  juce::Label mixLabel, delayLabel, overlapLabel, fftLenLabel;
-  juce::ComboBox delayUnitBox;
-  juce::Image logo;
-
-  // Manual handling for split params
-  void updateMixParam();
-  void updateDelayParam();
-  void updateFFTLenParam();
-  void updateOverlapParam();
-
-  juce::ToggleButton mixLock, delayLock, fftLock, overlapLock;
-
-  RetroLookAndFeel retroLnF;
+  design::MixBackKnob knob;
+  design::GlobalHeading delayHeading, overlapHeading, blkLenHeading;
 };
 
 //==============================================================================
@@ -109,7 +94,7 @@ public:
     void paint(juce::Graphics& g) override;
 
     DtBlkFxEditor& owner;
-    juce::TextButton randomizeButton{"Randomize"};
+    design::RandomButton randomizeButton;
     juce::Slider smoothSlider;
     juce::Label smoothLabel;
     juce::ComboBox presetBox;
@@ -134,6 +119,11 @@ public:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> enableAttachment;
   };
 
+  // Figma node 6-669. Fixed until 6.7, then revisited -- the design is built
+  // on auto-layout and is meant to become resizable.
+  static constexpr int windowWidth = 652;
+  static constexpr int windowHeight = 912;
+
 private:
   DtBlkFxAudioProcessor& audioProcessor;
 
@@ -141,6 +131,7 @@ private:
   // returning -- launchAsync's callback fires later, on the message thread.
   std::unique_ptr<juce::FileChooser> fileChooser;
 
+  design::TitleBar titleBar;
   HeaderComponent header;
   FooterComponent footer;
   LimiterComponent limiter;

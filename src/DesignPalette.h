@@ -20,6 +20,7 @@
 
 #include "BinaryData.h"
 #include <juce_graphics/juce_graphics.h>
+#include <juce_gui_basics/juce_gui_basics.h>
 
 namespace design {
 
@@ -106,6 +107,72 @@ private:
   {
     return juce::Typeface::createSystemTypefaceFor(data, (size_t)size);
   }
+};
+
+//==============================================================================
+/** The design's glyphs, as the exact path data from the Figma export.
+
+    They are drawn on a 6x7 / 7x9 pixel grid, so they are taken verbatim rather
+    than redrawn -- hand-approximating a 7px padlock does not survive contact
+    with the design. The `.svg` files they came from are kept in `assets/icons/`
+    for provenance; only the path data is compiled in.
+
+    Path data rather than embedded SVG for two reasons: the colour is a state
+    (a locked padlock, a lit power symbol, a hovered glyph) and has to be set at
+    paint time, and `help_button.svg` carries its Win95 edge as an SVG inner-
+    shadow filter, which JUCE's parser does not implement -- `drawBevel` draws
+    that far better.
+
+    Hold one via `juce::SharedResourcePointer<design::Glyphs>`.
+*/
+struct Glyphs {
+  Glyphs()
+      : lockLocked(parse("M2 4H5V1H6V4H7V8H6V9H0V4H1V1H2V4ZM5 1H2V0H5V1Z"))
+      , lockUnlocked(parse("M2 4H7V8H6V5H1V8H6V9H0V4H1V1H2V4ZM6 2H5V1H6V2ZM5 1H2V0H5V1Z"))
+      , lockLockedSmall(parse("M2 3H4V1H5V3H6V6H5V7H0V3H1V1H2V3ZM4 1H2V0H4V1Z"))
+      , lockUnlockedSmall(parse("M2 3H6V6H5V4H1V6H5V7H0V3H1V1H2V3ZM5 2H4V1H5V2ZM4 1H2V0H4V1Z"))
+      // On and off share one path in the export and differ only in fill, so
+      // here the colour is the whole state.
+      , power(parse("M6 9H2V8H6V9ZM2 8H1V7H2V8ZM7 8H6V7H7V8ZM1 7H0V3H1V7ZM8 7H7V3H8V7ZM4.5 "
+                    "5H3.5V0H4.5V5ZM2 3H1V2H2V3ZM7 3H6V2H7V3Z"))
+      , beatSyncOn(parse("M6 9H3V8H6V9ZM3 6H2V7H1V8H0V5H3V6ZM3 8H2V7H3V8ZM7 8H6V7H7V8ZM8 "
+                         "7H7V5H8V7ZM2 4H1V2H2V4ZM9 4H6V3H7V2H8V1H9V4ZM3 2H2V1H3V2ZM7 "
+                         "2H6V1H7V2ZM6 1H3V0H6V1Z"))
+      , beatSyncOff(parse("M4 9H3V8H4V9ZM3 6H2V7H1V8H0V5H3V6ZM3 8H2V7H3V8ZM2 4H1V2H2V4ZM9 "
+                          "4H6V3H7V2H8V1H9V4ZM3 2H2V1H3V2ZM7 2H6V1H7V2ZM6 1H3V0H6V1Z"
+                          "M9 5H10V6H9V5ZM5 5H6V6H5V5ZM8 6H9V7H8V6ZM6 6H7V7H6V6ZM7 7H8V8H7V7ZM8 "
+                          "8H9V9H8V8ZM6 8H7V9H6V8ZM9 9H10V10H9V9ZM5 9H6V10H5V9Z"))
+      , help(parse("M8.0625 15.1875V11.9375H11.3125V15.1875H8.0625ZM6.4375 7.0625V5.4375H8.0625V7"
+                   ".0625H6.4375ZM8.0625 10.3125V8.6875H9.6875V7.0625H11.3125V5.4375H8.0625V3.812"
+                   "5H12.9375V5.4375H14.5625V8.6875H12.9375V10.3125H8.0625Z"))
+  {
+  }
+
+  juce::Path lockLocked, lockUnlocked, lockLockedSmall, lockUnlockedSmall;
+  juce::Path power, beatSyncOn, beatSyncOff, help;
+
+  const juce::Path& lock(bool locked, bool big) const
+  {
+    if (big)
+      return locked ? lockLocked : lockUnlocked;
+    return locked ? lockLockedSmall : lockUnlockedSmall;
+  }
+
+  /** Fill a glyph centred in `target`, scaled to fit, in `c`. */
+  static void draw(juce::Graphics& g,
+                   const juce::Path& path,
+                   juce::Rectangle<float> target,
+                   juce::Colour c)
+  {
+    if (path.isEmpty())
+      return;
+
+    g.setColour(c);
+    g.fillPath(path, path.getTransformToScaleToFit(target, true, juce::Justification::centred));
+  }
+
+private:
+  static juce::Path parse(const char* d) { return juce::Drawable::parseSVGPath(d); }
 };
 
 } // namespace design
