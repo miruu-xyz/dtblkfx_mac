@@ -2,6 +2,7 @@
 
 #include "DtBlkFxProcessor.h"
 #include "DesignChrome.h"
+#include "DesignRow.h"
 #include "SpectrogramComponent.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -34,47 +35,6 @@ private:
 };
 
 //==============================================================================
-class ParameterRowComponent : public juce::Component {
-public:
-  ParameterRowComponent(DtBlkFxAudioProcessor& p, int index, design::LockHoverState& lockHover);
-  ~ParameterRowComponent() override;
-
-  void paint(juce::Graphics& g) override;
-  void resized() override;
-
-  // Reports the row's lock to the shared hover signal, so hovering it outlines
-  // RANDOM like the header locks do. 6.3 replaces this button with the design's
-  // glyph, which will report directly.
-  void mouseEnter(const juce::MouseEvent& e) override;
-  void mouseExit(const juce::MouseEvent& e) override;
-
-  bool isLocked() const { return lockButton.getToggleState(); }
-
-  // Re-read every slider's text from its parameter.
-  void refreshTexts();
-
-  juce::ToggleButton lockButton;
-  juce::ToggleButton onOffButton;
-
-private:
-  DtBlkFxAudioProcessor& processor;
-  design::LockHoverState& lockHover;
-  int rowIndex;
-  juce::Slider freqASlider, freqBSlider, ampSlider, valSlider, valFineSlider;
-  juce::ComboBox typeBox;
-
-  juce::Label freqALabel, freqBLabel, ampLabel, valLabel, valFineLabel;
-
-  std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> freqAAttachment;
-  std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> freqBAttachment;
-  std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> ampAttachment;
-  std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> valAttachment;
-  std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAttachment;
-  std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onOffAttachment;
-
-  RetroLookAndFeel retroLnF;
-};
-
 //==============================================================================
 class DtBlkFxEditor
     : public juce::AudioProcessorEditor
@@ -162,7 +122,7 @@ private:
   juce::ComboBox inputChannelSelector;
   juce::ComboBox outputChannelSelector;
 
-  std::vector<std::unique_ptr<ParameterRowComponent>> paramRows;
+  std::vector<std::unique_ptr<design::FxRow>> paramRows;
 
   RetroLookAndFeel retroLnF;
 

@@ -270,4 +270,28 @@ drawRaised(juce::Graphics& g, const juce::Path& path, juce::Colour fill, float o
   g.fillPath(path);
 }
 
+/** The outline width for a glyph, as opposed to a letterform.
+
+    `drawRaised`'s default 1.2px suits a 28px heading; the stroke is a fixed
+    width, so on a 9px padlock the same edge closes the counters and washes the
+    whole glyph out toward the background. */
+inline constexpr float glyphOutline = 0.45f;
+
+/** The design's two-state glyph fill. Hovering always wins, so the affordance
+    reads the same whichever state the glyph is in. */
+inline juce::Colour glyphColour(bool on, bool hovered)
+{
+  if (hovered)
+    return colour::accentBright;
+
+  return on ? colour::accent : colour::textDim;
+}
+
+/** The hover highlight behind a small glyph. At 9px the glyph alone is too
+    small for a colour change to register, so the ground brightens too. */
+inline juce::Rectangle<int> glyphHitArea(juce::Rectangle<int> glyph)
+{
+  return glyph.expanded(3);
+}
+
 } // namespace design

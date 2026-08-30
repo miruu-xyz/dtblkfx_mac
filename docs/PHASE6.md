@@ -139,7 +139,7 @@ closed.
   `tests/param_text_test.cpp` asserts that a bypassed row is indistinguishable
   from one running `Off`, and that `FX_TYPE` survives the round trip.
 
-### 6.3b — The FX row, static
+### 6.3b — The FX row, static ✅
 
 Rewrite `ParameterRowComponent` as one painted component: dashed `#999DA6`
 border, bevelled dropdown (128 × 26), four text cells and the `↔` grip, lock
@@ -193,6 +193,62 @@ limitation carries straight over and is not a bug introduced here.
   between 6.3b and 6.6 the rows look flat. A static wedge drawn on the wrong
   mapping gets redrawn in 6.6 anyway, and a row that looks finished but does not
   respond is worse to QA than one that visibly is not.
+
+**What 6.3b landed** -- `src/DesignRow.h/.cpp`, kept beside `DesignChrome` for
+the same reason: the row and the chrome are separate diffs.
+
+- `RowValue` x4, `FreqLink`, `FxTypeCell`, and `FxRow` which paints the dashed
+  border and the two glyphs and owns the rest.
+- **Hover is recomputed from the pointer, not from the direction of travel.**
+  A pointer moving from a row onto one of its own children sends the row a
+  `mouseExit`, so the children report through a `HoverRelay` and `updateHover`
+  asks `getMouseXYRelative()` where the pointer actually is.
+- **A bypassed row fades rather than being drawn differently** --
+  `setAlpha(0.3)` on the value cells, the border dimmed to match. Nothing
+  shifts as a row goes off and back on. The picker takes its *full*-strength
+  fill and bevel while bypassed, which the design does too: only the resting
+  row has it at half.
+- **`↔` and `↕` are drawn, not typed.** Neither embedded typeface is
+  guaranteed to carry U+2194 or U+2195, and a tofu box mid-row would be loud --
+  the same call `RetroLookAndFeel::drawComboBox` already made. Both get a stem
+  between the heads; two heads alone read as a pair of blobs at 10px.
+- **The picker's bevel is a single inset step**, not
+  `RetroLookAndFeel::drawBevel`'s two: the design gives it 1px of `#808080` top
+  left and 1px of white bottom right, and the heavier edge reads wrong at
+  128 x 26.
+- The FX menu is flat and in engine order for now, with the duplicate `Off`
+  suppressed -- the effect table has two adjacent no-op slots and both report
+  the same name. 6.4 is the grouping.
+
+**6.3b follow-ups.** A first review pass produced four changes:
+
+- **The value cells take a left-right cursor.** The drag still sums both axes;
+  the cursor was claiming otherwise, and in a row that reads left to right the
+  vertical hint was simply misleading.
+- **`refresh()` repaints only when what a cell reads has actually changed.**
+  The editor polls ten times a second, and the row was repainting regardless --
+  eight rows of unconditional repaints competing on the message thread with the
+  cell being dragged, so the paints coalesced and a drag felt sluggish. The old
+  comment at the call site already claimed this ("`updateText()` is a no-op when
+  the string has not changed"), which was true of the sliders it was written
+  for and stopped being true here.
+- **`FxRow::paint` clips the glyphs out early.** The value cells are not opaque,
+  so every repaint of a cell being dragged also runs the row's `paint` -- and
+  `drawRaised` builds a `DropShadow` image per glyph, which is far too
+  expensive to do on every drag event. Together with the change above this is
+  what actually fixed the drag feel.
+- **The white line through both arrows** was the stem winding against the heads
+  in a shared `Path`, so the overlap filled as a hole. The stem is a separate
+  `fillRect` now; nothing relies on winding.
+- **The picker brightens on its own hover, not the row's** -- a deliberate
+  departure from the Figma. The row's hover cue belongs to the frequency window
+  (6.6); having the picker light up from anywhere in the row makes it look
+  clickable when the pointer is nowhere near it. `FxRow::hovered` is therefore
+  tracked but drives nothing until 6.6.
+
+**Open for QA:** the `---` on a bypassed row is drawn at 30% black. The Figma's
+generated markup puts no opacity on that text, but its own render reads lighter
+than the `Clip` beside it, so this is a judgment call rather than a measurement.
 
 ### 6.4 — FX type menu
 

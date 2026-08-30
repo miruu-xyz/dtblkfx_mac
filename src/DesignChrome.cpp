@@ -14,26 +14,10 @@ namespace design {
 
 namespace {
 
-// Full travel in roughly 200px of drag, either axis. The original's sliders
-// were about a window-width wide, so this is the same order of sensitivity.
-constexpr float dragRange = 200.0f;
-
 // A menu value below this is a command rather than a value to set.
 constexpr float commandValue = -1.0f;
 
 // White outline width for the header glyphs. Much thinner than the headings'
-// 1.2px: the stroke is a fixed width, so on a 9px padlock it closes the
-// counters and washes the whole glyph out toward the background.
-constexpr float glyphOutline = 0.45f;
-
-juce::Colour glyphColour(bool on, bool hovered)
-{
-  if (hovered)
-    return colour::accentBright;
-
-  return on ? colour::accent : colour::textDim;
-}
-
 } // namespace
 
 //==============================================================================
@@ -391,12 +375,6 @@ int GlobalHeading::titleWidth() const
   return fonts->heading(28.0f).getStringWidth(title);
 }
 
-juce::Rectangle<int> GlobalHeading::glyphHitArea(juce::Rectangle<int> glyph)
-{
-  // Padded, both so a 9px target is actually clickable and so the hover
-  // highlight has somewhere to sit.
-  return glyph.expanded(3);
-}
 
 // Both sit far enough from the top that glyphHitArea's 3px padding -- and so
 // the hover highlight -- stays inside the component instead of being clipped.

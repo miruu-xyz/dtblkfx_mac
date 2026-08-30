@@ -152,7 +152,8 @@ juce_add_binary_data(DtBlkFxAssets SOURCES
 target_sources(DtBlkFx PRIVATE
     src/DtBlkFxProcessor.cpp
     src/DtBlkFxEditor.cpp
-    src/DesignChrome.cpp)
+    src/DesignChrome.cpp
+    src/DesignRow.cpp)
 
 target_include_directories(DtBlkFx PRIVATE
     src

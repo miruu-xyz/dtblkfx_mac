@@ -78,6 +78,11 @@ public:
 
   bool isHovered() const { return hovered; }
 
+  /** Full travel in roughly 200px of drag, on either axis. The original's
+      sliders were about a window-width wide, so this is the same order of
+      sensitivity. */
+  static constexpr float dragRange = 200.0f;
+
 protected:
   /** Entries for the right-click menu, as {value, label}. Rebuilt on each
       open, because the tempo-dependent ones go stale. */
@@ -179,7 +184,6 @@ private:
   static constexpr float readoutBaseline = 42.0f;
 
   int titleWidth() const;
-  static juce::Rectangle<int> glyphHitArea(juce::Rectangle<int> glyph);
   juce::Rectangle<int> lockBounds() const;
   juce::Rectangle<int> syncBounds() const;
   bool hasSyncGlyph() const { return which != Which::blkLen; }
