@@ -281,6 +281,39 @@ int main(int argc, char** argv)
     check(overlap->getText(1.0f, 0) == "85%", "overlap 1 reads " + overlap->getText(1.0f, 0));
   }
 
+  // --- Phase 6.3a: per-row bypass -------------------------------------------
+  // The engine has no bypass of its own, so fxOn_<n> masks FX_TYPE on the way
+  // to it. Two things have to hold: bypassing a row is indistinguishable from
+  // running "Off" in it, and the row's own FX_TYPE parameter is left alone, so
+  // whatever is parked in the row comes back untouched.
+  {
+    auto* type = get(p, set0(FX_TYPE));
+    auto* amp = get(p, set0(FX_AMP));
+    auto* on = get(p, DtBlkFxAudioProcessor::fxOnId(0));
+
+    if (type != nullptr && amp != nullptr && on != nullptr) {
+      const auto running = amp->getText(0.5f, 0);
+
+      type->setValueNotifyingHost(type->getValueForText("Off"));
+      const auto offText = amp->getText(0.5f, 0);
+      check(offText != running, "\"Off\" prints the same amp text as Contrast");
+
+      type->setValueNotifyingHost(getEffectTypeInv(1));
+      const float parked = type->getValue();
+
+      on->setValueNotifyingHost(0.0f);
+      check(amp->getText(0.5f, 0) == offText,
+            "bypassed row reads \"" + amp->getText(0.5f, 0) + "\", not \"" + offText + "\"");
+      check(type->getValue() == parked, "bypass moved the row's FX_TYPE parameter");
+
+      on->setValueNotifyingHost(1.0f);
+      check(amp->getText(0.5f, 0) == running,
+            "un-bypassing read \"" + amp->getText(0.5f, 0) + "\", not \"" + running + "\"");
+    }
+
+    checkTextRoundTrip(p, DtBlkFxAudioProcessor::fxOnId(0));
+  }
+
   // Phase 6.1: the embedded fonts. createSystemTypefaceFor returns null on a
   // file it cannot parse, and juce::Font then falls back to a system face
   // without complaining -- so a broken BinaryData wiring looks like a slightly

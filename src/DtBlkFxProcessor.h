@@ -87,9 +87,20 @@ public:
   // "param_<n>", or an empty string for the two replaced packed params.
   static juce::String paramId(int index);
 
+  // Per-row bypass. The engine has no bypass of its own -- the only way to
+  // silence a set is to run the "Off" effect in it -- so this is a host
+  // parameter that masks FX_TYPE on the way to the engine. FX_TYPE itself is
+  // left alone, which is the point: a bypassed row keeps whatever effect is
+  // parked in it, and un-bypassing restores it exactly.
+  static juce::String fxOnId(int set);
+
   // Text the host shows for one engine parameter, produced by the engine's own
   // display code so it reads exactly as the original plugin did.
   juce::String coreParamText(int index, float v);
+
+  // Send one set's FX_TYPE to the engine, substituting "Off" while the set is
+  // bypassed. Every writer of that engine value goes through here.
+  void pushFxType(int set);
 
   // BlkLen and Overlap get their own: the engine's display code ignores the
   // value it is given for BlkLen, and Overlap is no longer one packed value.

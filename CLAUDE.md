@@ -117,6 +117,15 @@ Things in this codebase that have already cost time, or are waiting to:
   sync and the parameter interpolation window read from the same place, so
   anything tempo-related that looks wrong starts here. The harness pins
   `timeInfo` explicitly and does not exercise this path.
+- **`FX_TYPE` has two writers' worth of intent and exactly one writer.** The
+  engine has no bypass, so `fxOn_0..7` (Phase 6.3a) silences a row by writing
+  the `Off` effect into the engine's `FX_TYPE` while leaving the host
+  parameter alone. Everything that sends `FX_TYPE` to the engine must go
+  through `DtBlkFxAudioProcessor::pushFxType(set)`; calling
+  `core->setParameter` for an `FX_TYPE` index directly re-enables a bypassed
+  row silently. The `Off` value is looked up by name, not hard-coded, because
+  the effect table's two adjacent no-op slots may be filled in later.
+
 - **`setInitialDelay()` is a no-op**, so plugin latency is never reported to the
   host.
 - **Editor readouts must come from the parameters, not from hand-rolled

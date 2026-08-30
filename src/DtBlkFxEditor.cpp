@@ -197,49 +197,15 @@ ParameterRowComponent::ParameterRowComponent(DtBlkFxAudioProcessor& p,
   lockButton.setButtonText("Lock");
   lockButton.addMouseListener(this, false);
 
-  // On/Off Button
+  // On/Off Button. Bound to the row's bypass parameter, which masks FX_TYPE on
+  // the way to the engine -- so the effect parked in the row survives being
+  // switched off, and the GUI does not have to remember it.
   addAndMakeVisible(onOffButton);
   onOffButton.setButtonText("On");
-  onOffButton.setToggleState(true, juce::dontSendNotification); // Default On
-
-  // Handle On/Off logic
-  onOffButton.onClick = [this] {
-    if (onOffButton.getToggleState()) {
-      // Turned ON: Restore last active type
-      typeBox.setSelectedId(lastActiveTypeId, juce::sendNotification);
-      onOffButton.setButtonText("On");
-    }
-    else {
-      // Turned OFF: Store current type and set to "Off"
-      int currentId = typeBox.getSelectedId();
-      // Find "Off" ID
-      int offId = -1;
-      for (int i = 0; i < typeBox.getNumItems(); ++i) {
-        if (typeBox.getItemText(i) == "Off") {
-          offId = typeBox.getItemId(i);
-          break;
-        }
-      }
-
-      if (offId != -1 && currentId != offId) {
-        lastActiveTypeId = currentId;
-        typeBox.setSelectedId(offId, juce::sendNotification);
-      }
-      onOffButton.setButtonText("Off");
-    }
-  };
-
-  // Update On/Off state when Type changes externally
-  typeBox.onChange = [this] {
-    if (typeBox.getText() == "Off") {
-      onOffButton.setToggleState(false, juce::dontSendNotification);
-      onOffButton.setButtonText("Off");
-    }
-    else {
-      onOffButton.setToggleState(true, juce::dontSendNotification);
-      onOffButton.setButtonText("On");
-      lastActiveTypeId = typeBox.getSelectedId();
-    }
+  onOffAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+      apvts, DtBlkFxAudioProcessor::fxOnId(index), onOffButton);
+  onOffButton.onStateChange = [this] {
+    onOffButton.setButtonText(onOffButton.getToggleState() ? "On" : "Off");
   };
 }
 

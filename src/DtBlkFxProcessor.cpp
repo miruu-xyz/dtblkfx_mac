@@ -65,6 +65,13 @@ DtBlkFxAudioProcessor::DtBlkFxAudioProcessor()
   for (auto* id : {mixBackId, powerId, overlapId, syncId})
     apvts.addParameterListener(id, this);
 
+  // After the bulk push above, which wrote the unmasked type: re-send each
+  // set's FX_TYPE so a bypassed row starts silent.
+  for (int set = 0; set < BlkFxParam::NUM_FX_SETS; ++set) {
+    apvts.addParameterListener(fxOnId(set), this);
+    pushFxType(set);
+  }
+
   // One call each is enough: parameterChanged reads the partner itself.
   parameterChanged(mixBackId, apvts.getRawParameterValue(mixBackId)->load());
   parameterChanged(overlapId, apvts.getRawParameterValue(overlapId)->load());
@@ -152,7 +159,44 @@ int effectIndexForName(const juce::String& text)
   return -1;
 }
 
+/** The FX_TYPE value that selects the "Off" effect.
+
+    Found by name rather than hard-coded: the effect table has two adjacent
+    no-op slots and they are candidates for being filled in later, so an index
+    literal here would rot silently.
+*/
+float offEffectParam()
+{
+  static const float v = [] {
+    const int idx = effectIndexForName("Off");
+    return idx >= 0 ? BlkFxParam::getEffectTypeInv(idx) : 0.0f;
+  }();
+  return v;
+}
+
 } // namespace
+
+juce::String DtBlkFxAudioProcessor::fxOnId(int set)
+{
+  return "fxOn_" + juce::String(set);
+}
+
+void DtBlkFxAudioProcessor::pushFxType(int set)
+{
+  if (core == nullptr)
+    return;
+
+  const int index = BlkFxParam::paramOffs(set) + BlkFxParam::FX_TYPE;
+  const bool on = apvts.getRawParameterValue(fxOnId(set))->load() >= 0.5f;
+
+  core->setParameter(index,
+                     on ? apvts.getRawParameterValue(paramId(index))->load() : offEffectParam());
+
+  // FX_TYPE decides what the other four params in the set mean, including
+  // whether they print "-" at all -- and a bypassed row prints "-" throughout,
+  // which is what makes the greyed row in the design read correctly.
+  displayRefresher.triggerAsyncUpdate();
+}
 
 juce::String DtBlkFxAudioProcessor::paramId(int index)
 {
@@ -423,6 +467,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout DtBlkFxAudioProcessor::creat
     addFx(FX_VAL, "Value", 0.0f, [](const juce::String& t) {
       return juce::jlimit(0.0f, 1.0f, t.trim().getFloatValue());
     });
+
+    // Bypass, as an "on" so the row's power glyph lights when the row runs.
+    // Not an engine parameter -- see fxOnId / pushFxType.
+    addBool(fxOnId(set), prefix + ": On", true, "on", "off");
   }
 
   // Limiter Parameters
@@ -454,17 +502,27 @@ void DtBlkFxAudioProcessor::parameterChanged(const juce::String& parameterID, fl
 
   if (parameterID.startsWith("param_")) {
     const int index = parameterID.substring(6).getIntValue();
+
+    // FX_TYPE decides what the other four params in its set mean, including
+    // whether they print "-" at all -- and while the set is bypassed the
+    // engine has to keep running "Off" whatever the parameter now says.
+    if (index >= BlkFxParam::NUM_GLOBAL_PARAMS &&
+        (index - BlkFxParam::NUM_GLOBAL_PARAMS) % BlkFxParam::NUM_FX_PARAMS ==
+            BlkFxParam::FX_TYPE) {
+      pushFxType((index - BlkFxParam::NUM_GLOBAL_PARAMS) / BlkFxParam::NUM_FX_PARAMS);
+      return;
+    }
+
     core->setParameter(index, newValue);
     // BlkLen and Overlap both print something derived from the block length,
     // which DELAY caps and FFT_LEN requests.
     if (index == BlkFxParam::DELAY || index == BlkFxParam::FFT_LEN)
       displayRefresher.triggerAsyncUpdate();
-    // FX_TYPE decides what the other four params in its set mean, including
-    // whether they print "-" at all.
-    else if (index >= BlkFxParam::NUM_GLOBAL_PARAMS &&
-             (index - BlkFxParam::NUM_GLOBAL_PARAMS) % BlkFxParam::NUM_FX_PARAMS ==
-                 BlkFxParam::FX_TYPE)
-      displayRefresher.triggerAsyncUpdate();
+    return;
+  }
+
+  if (parameterID.startsWith("fxOn_")) {
+    pushFxType(parameterID.substring(5).getIntValue());
     return;
   }
 

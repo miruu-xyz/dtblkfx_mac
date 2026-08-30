@@ -109,16 +109,90 @@ the window read correctly.
 
 Done. See "What 6.2 landed" below.
 
-### 6.3 — The FX row, static
+### 6.3a — Per-row bypass ✅
+
+A host parameter per FX set, `fxOn_0..7`, named `<n>: On`, default on.
+
+The engine has no bypass: the only way to silence a set is to run the "Off"
+effect in it. So this is a JUCE-layer parameter that masks `FX_TYPE` on the way
+to the engine, in `DtBlkFxAudioProcessor::pushFxType`, which is now the single
+writer of that engine value. The row's own `FX_TYPE` parameter is never
+touched, which is the whole point — whatever effect is parked in a bypassed row
+comes back exactly, with no GUI-side memory of it.
+
+It replaces `ParameterRowComponent::lastActiveTypeId`, which remembered the
+last non-Off effect in the editor and therefore lost it whenever the editor
+closed.
+
+- **Not randomised.** `startRandomization` already skips every id that is not
+  `param_*` or one of the four unpacked globals, so this needed no change.
+  Which lanes are running is a decision you made; the effects in them are what
+  RANDOM is for.
+- **State is plain APVTS XML**, so presets saved before this load fine and come
+  back un-bypassed. No format bump.
+- **"Off" stays in the FX menu.** It is a real `FX_TYPE` value that existing
+  presets and automation can hold, and the engine answers `Off` for those table
+  slots whatever the menu shows. Dropping it buys nothing until slots 9 and 10
+  are actually filled, and then it is one line in 6.4.
+- The `Off` effect has `_params_used` all zero, so **a bypassed row prints `-`
+  for all four values** — which is exactly the greyed Variant3 the design draws.
+  `tests/param_text_test.cpp` asserts that a bypassed row is indistinguishable
+  from one running `Off`, and that `FX_TYPE` survives the round trip.
+
+### 6.3b — The FX row, static
 
 Rewrite `ParameterRowComponent` as one painted component: dashed `#999DA6`
-border, bevelled dropdown (128 × 26), five text cells, lock and power glyphs.
-Values still change by dragging, but they render as the design's text — no JUCE
-text boxes.
+border, bevelled dropdown (128 × 26), four text cells and the `↔` grip, lock
+and power glyphs. Values still change by dragging, but they render as the
+design's text — no JUCE text boxes.
 
 Includes **click-to-type value entry**. Phase 5 already wired `valueFromString`
 for everything except `FX_VAL`, which accepts a bare 0..1 number only; that
 limitation carries straight over and is not a bug introduced here.
+
+**Settled before starting (grilled 2026-08-30):**
+
+- **Row geometry**, from Figma `5:276`: 618 x 40. Four equal 109.75px value
+  cells, a fixed 10px `↔` between the two frequency cells, the 128 x 26
+  dropdown third, then a 25px lock+power group and 16px right padding. No
+  column headers anywhere, so row 0's `Freq A / Freq B / Amp / Val / Fine`
+  labels go. The row lock is the same 7x9 art as the header's, drawn 1:1 (the
+  header renders it at 1.5x); the 6x7 `Small`/`Size3` variants are unused.
+- **The four variants are Default / Hover / Selected / Variant3.** Hover is
+  row-wide, on pointer enter. It raises the dropdown fill from
+  `rgba(255,255,255,0.2)` to `0.5`, makes its bevel fully opaque, and takes the
+  two out-of-range dimming overlays from 30% to their full 60% — so the
+  frequency window reads harder under the pointer. Selected is Hover plus a 2px
+  `#8A38F5` border on the dropdown, and lasts only while the menu is up.
+  Variant3 is the row bypassed.
+- **A bypassed row reads `---` in the dropdown**, matching the design, even
+  though `FX_TYPE`'s text is formatted JUCE-side and would happily print the
+  parked effect. The four values already print `-` because the engine formats
+  them and sees `Off`. Showing the parked type but dashed values would give
+  half the information from a display path with two sources; formatting amp and
+  val outside the engine is the thing `CLAUDE.md` forbids.
+- **The `ComboBox` goes.** It is a sealed stock widget: its frame can be
+  restyled through the LookAndFeel but the menu it builds cannot, so the two
+  columns and `NORMAL` / `MASK FX` / `STEREO FX` headers 6.4 needs are
+  unreachable from it. Replaced here by a painted cell that pops a `PopupMenu`
+  and writes `FX_TYPE` itself — roughly what the original's `_fxtype_ctrl` and
+  its `_map_menu_to_param` table did — so 6.4 is purely the grouping.
+- **The four value cells reuse `DraggableValue`**, which already is the
+  original's `DtPopupHSlider`. Menus on amp and val only, ported from
+  `FxCtrl::updateAmpMenu` (dB or percent, chosen by the effect's
+  `ampMixMode()`) and `updateFxValMenu` (the effect's own `getValueName(i)`
+  list), rebuilt when the row's effect changes. The frequencies get no menu —
+  the original never populated one for them.
+- **`↔` is the original's "drag both" gesture**, which `FxCtrl.cpp:413`
+  bound to right-button or ctrl+left over the frequency area. It moves both
+  frequencies by the same delta *in parameter space*, so the ratio between them
+  holds rather than the Hz difference. Horizontal drag only, left-right cursor,
+  no menu and no typed entry. It needs no coordinate model, so it ships here
+  rather than in 6.6.
+- **No wedge and no frequency window yet.** Both wait for 6.5's mapping, so
+  between 6.3b and 6.6 the rows look flat. A static wedge drawn on the wrong
+  mapping gets redrawn in 6.6 anyway, and a row that looks finished but does not
+  respond is worse to QA than one that visibly is not.
 
 ### 6.4 — FX type menu
 
@@ -143,6 +217,11 @@ The amp wedge, the frequency window with its two dimming overlays
 selecting a Mask effect outlines **that row and the one below it** in dashed
 purple.
 
+**The wedge in the Figma is eyeballed.** It is a hand-drawn `Vector 3` with a
+420px rectangle over it, not a plot of anything. The plugin's wedge should
+match the actual behaviour split, which changes once dry/wet becomes a gain —
+so take the geometry from the engine, not from the design file.
+
 ### 6.7 — Spectrograms
 
 Repaint both against 6.5's mapping so their columns line up with the row
@@ -150,6 +229,14 @@ handles below. Then, optionally, restore the original's behaviour where the
 spectrogram is a control surface and dragging on it sets a row's frequency
 range — that is in `dtblkfx_src/Spectrogram.cpp`, not in the Figma, so it needs
 a scope decision.
+
+### 6.8 — Persistent locks
+
+The eleven locks — three global, eight per-row — are ephemeral: bare
+`ToggleButton`s with no parameter, read only by `startRandomization`. They are
+lost when the editor closes. Making them persist is a state-format change
+affecting all eleven at once, so it is its own small phase rather than a rider
+on the row rewrite.
 
 ## Seeing the GUI without a DAW
 

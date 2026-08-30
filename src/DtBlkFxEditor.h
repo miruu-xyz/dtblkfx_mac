@@ -55,7 +55,6 @@ public:
 
   juce::ToggleButton lockButton;
   juce::ToggleButton onOffButton;
-  int lastActiveTypeId = 1; // Default to 1 (first effect) if not Off
 
 private:
   DtBlkFxAudioProcessor& processor;
@@ -71,6 +70,7 @@ private:
   std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> ampAttachment;
   std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> valAttachment;
   std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAttachment;
+  std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onOffAttachment;
 
   RetroLookAndFeel retroLnF;
 };
