@@ -13,10 +13,13 @@
  * See LICENSE.md for copyright and licensing information.
  */
 
+#include "DesignAxis.h"
 #include "DesignPalette.h"
 #include "DesignRow.h"
 #include "DtBlkFxProcessor.h"
 #include "RetroLookAndFeel.h"
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 namespace {
@@ -343,6 +346,84 @@ int main(int argc, char** argv)
     }
 
     checkTextRoundTrip(p, DtBlkFxAudioProcessor::fxOnId(0));
+  }
+
+  // --- Phase 6.5: the shared coordinate model --------------------------------
+  // The rows' handles and the spectrogram columns must agree by construction,
+  // so the model is checked here rather than by eye.
+  {
+    namespace ax = design::axis;
+    std::printf("\ncoordinate model\n");
+
+    const auto s = ax::span({0.0f, 0.0f, 640.0f, 40.0f});
+    check(s == juce::Range<float>(5.0f, 635.0f), "axis span is not inset 5px each side");
+
+    for (float v : {0.0f, 0.1f, 0.5f, 0.97f, 1.0f})
+      check(std::abs(ax::xToParam(ax::paramToX(v, s), s) - v) < 1.0e-5f,
+            "param -> x -> param lost " + juce::String(v));
+
+    // Known points on the frequency axis: 0 is 0 Hz, the middle is 649.6 Hz,
+    // and the right edge is the Figma's 25.8 kHz.
+    check(ax::paramToHz(0.0f) == 0.0f, "param 0 is not 0 Hz");
+    check(std::abs(ax::paramToHz(0.5f) - 649.6f) < 0.5f,
+          "param 0.5 is " + juce::String(ax::paramToHz(0.5f)) + " Hz, not 649.6");
+    check(std::abs(ax::paramToHz(1.0f) - 25826.0f) < 20.0f,
+          "param 1 is " + juce::String(ax::paramToHz(1.0f)) + " Hz, not 25.8k");
+    for (float v : {0.01f, 0.3f, 0.5f, 0.9f, 1.0f})
+      check(std::abs(ax::hzToParam(ax::paramToHz(v)) - v) < 1.0e-4f,
+            "param -> Hz -> param lost " + juce::String(v));
+
+    // The wedge's 0 dB split has to be where the host says 0 dB is, not where
+    // the Figma drew it. Set 1 is on Contrast, which reads amp in dB.
+    if (auto* amp = get(p, set0(FX_AMP)))
+      check(amp->getText(ax::ampUnityParam(), 0) == "0.0 dB",
+            "the amp split reads \"" + amp->getText(ax::ampUnityParam(), 0) + "\", not 0.0 dB");
+
+    // Spectrogram columns across the 630px strip, for the smallest and largest
+    // FFTs, and a sample rate whose Nyquist is past the axis altogether.
+    const int columns = (int)s.getLength();
+    for (auto [fftLen, rate] : {std::pair{256, 44100.0}, std::pair{1024, 44100.0},
+                                std::pair{80640, 48000.0}, std::pair{1024, 96000.0}}) {
+      const auto edges = ax::binEdges(columns, fftLen, rate);
+      const int end = fftLen / 2 + 1;
+      const auto what = juce::String(fftLen) + " @ " + juce::String((int)rate);
+
+      check((int)edges.size() == columns + 1 && edges.front() == 0 && edges.back() == end,
+            what + ": edges do not run 0.." + juce::String(end));
+      check(std::is_sorted(edges.begin(), edges.end()), what + ": edges go backwards");
+
+      // Empty columns are exactly the ones past Nyquist, and form one run at
+      // the right.
+      const float nyquistParam = ax::hzToParam((float)rate * 0.5f);
+      const int expectedEmpty = nyquistParam >= 1.0f ? 0 : (int)std::ceil((1.0f - nyquistParam) * columns);
+      int empty = 0;
+      bool tail = true;
+      for (int c = columns - 1; c >= 0; --c) {
+        const auto bins = ax::columnBins(edges, c);
+        if (bins.isEmpty()) {
+          ++empty;
+          check(tail, what + ": empty column " + juce::String(c) + " below a non-empty one");
+        }
+        else {
+          tail = false;
+          check(bins.getStart() >= 0 && bins.getEnd() <= end,
+                what + ": column " + juce::String(c) + " reads outside the FFT");
+        }
+      }
+      check(std::abs(empty - expectedEmpty) <= 1,
+            what + ": " + juce::String(empty) + " empty columns, expected about " +
+                juce::String(expectedEmpty));
+
+      // The Nyquist bin is shown somewhere, whatever the rate.
+      bool nyquistShown = false;
+      for (int c = 0; c < columns && !nyquistShown; ++c)
+        nyquistShown = ax::columnBins(edges, c).contains(end - 1);
+      check(nyquistShown, what + ": the Nyquist bin is in no column");
+
+      std::printf("  fft %5d @ %6.0f Hz  -> %d columns, %d empty above Nyquist, %d showing only bins 0-1\n",
+                  fftLen, rate, columns, empty,
+                  (int)std::count_if(edges.begin(), edges.end() - 1, [&](int e) { return e <= 1; }));
+    }
   }
 
   // Phase 6.1: the embedded fonts. createSystemTypefaceFor returns null on a

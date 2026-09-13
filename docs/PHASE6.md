@@ -301,13 +301,67 @@ grouping exactly. Small and self-contained.
 **Open for QA:** the hover's dashed yellow ring. The render shows layout, the
 current-item colour and the headers, but a snapshot cannot show a hover.
 
-### 6.5 — Frequency and amp coordinate model
+### 6.5 — Frequency and amp coordinate model ✅
 
 One Hz↔x mapping, ported from `dtblkfx_src/PixelFreqBin.cpp`, shared by the row
 handles and the spectrograms. Nothing visible ships in this sub-phase.
 
 It exists because 6.6 and 6.7 both need it and must agree: if each grows its
 own mapping they will drift apart on screen and the alignment gets fixed twice.
+
+**Settled before starting (grilled 2026-09-13):**
+
+- **The frequency axis is the frequency parameter, linearly** -- exactly the
+  original's `genPixelToHz`. The parameter is a note offset, so this is already
+  log frequency: 0 Hz at the left edge, C0 (16.35 Hz) one step in, 25.8 kHz at
+  the right edge whatever the sample rate. At 44.1 kHz the last ~2% of the
+  width is above Nyquist and stays empty. Handles sit at their raw parameter,
+  not snapped to an FFT bin, so at the low end a handle can move a few pixels
+  while its bin-snapped readout holds still. The original's slider handles did
+  the same.
+- **The spectrogram rotates back to the original's orientation** in 6.7:
+  frequency across, the newest line entering at the bottom and the display
+  scrolling up. Today's is rotated 90 degrees, frequency vertical and linear in
+  bins, so it can never line up with anything in the rows.
+- **Both axes are inset 5px each side**, the spectrograms included, so a handle
+  at either extreme is fully visible and still sits over the spectrogram's
+  first or last column. The original laid its pixel table over `getWidth() - 10`.
+- **The amp wedge is its own gauge on its own axis**, the amp parameter across
+  the row, with the frequency window drawn over it. **0 dB sits at exactly 0.6**
+  (`getAmpParam0dB`), not where the Figma eyeballed it. How the dry/wet-to-gain
+  split *looks* is a 6.6 decision.
+
+**What 6.5 landed:** `src/DesignAxis.h`, header-only.
+
+- `span()`, `paramToX()` / `xToParam()`, `paramToHz()` / `hzToParam()` (the
+  engine's own `getHz` and `HzToNoteOffs`, not a second copy of the formula),
+  and `ampUnityParam()`.
+- `binEdges()` / `columnBins()`, the port of `PixelFreqBin`. Columns are defined
+  by their edges -- column c covers parameters `[c, c + 1) / columns`, which is
+  what `paramToX` puts under screen column c -- and that is why the original's
+  `half_pix` factor is not needed: it placed boundaries half a pixel either
+  side of each pixel's frequency because it labelled pixels by their left edge.
+- **One deliberate difference from the original:** columns wholly above Nyquist
+  come back empty and draw as silence. The original clamped them to the Nyquist
+  bin, which repeated that bin across the top of its display.
+- `dtblkfx_paramtext` checks the round trips, the known points (param 0.5 is
+  649.6 Hz, param 1 is 25.8 kHz), that the amp split reads `0.0 dB` in the
+  host's own text, and that the bin edges tile the FFT with the empty columns
+  exactly past Nyquist -- for FFTs of 256 and 80640 and at 96 kHz, where Nyquist
+  is past the axis altogether. Putting the original's Nyquist clamp back makes
+  it fail.
+
+**Two things the numbers say about 6.7:**
+
+- **The low end is blocky at short block lengths, and that is inherent.** On the
+  630px strip, a 256-point FFT at 44.1 kHz leaves 237 columns -- well over a
+  third of the width -- showing only bins 0 and 1. At 1024 points it is 118; at
+  the largest FFT it is one. The original had exactly the same property, since
+  a log axis over a linear FFT always does.
+- **At 88.2/96 kHz the rightmost column carries everything from 25.8 kHz to
+  Nyquist,** because the edges tile the whole FFT and the axis stops short of
+  it. Taking the max over that range is what the original did; whether to drop
+  it instead is a small 6.7 call.
 
 ### 6.6 — Row interactions
 
