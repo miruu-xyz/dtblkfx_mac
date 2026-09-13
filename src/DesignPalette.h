@@ -57,6 +57,11 @@ inline const juce::Colour rowOutline{0xff999da6}; // dashed border
 inline const juce::Colour fieldFill{0x33ffffff};  // dropdown, rgba(255,255,255,0.2)
 inline const juce::Colour rangeDim{0x4dffffff};   // outside the frequency range
 
+// Menus (Figma 3:130) and the open picker's border (Figma 6:485).
+inline const juce::Colour selection{0xff8a38f5};  // menu hover fill, open-picker border
+inline const juce::Colour focusRing{0xfffffe54};  // Win95 dashed focus rectangle
+inline const juce::Colour menuHeader{0x66000000}; // rgba(0,0,0,0.4) -- NORMAL / MASK FX
+
 } // namespace colour
 
 //==============================================================================
@@ -268,6 +273,23 @@ drawRaised(juce::Graphics& g, const juce::Path& path, juce::Colour fill, float o
 
   g.setColour(fill);
   g.fillPath(path);
+}
+
+/** A 1px dashed rectangle, drawn just inside `r`.
+
+    The FX row's border, the menu's focus ring, and 6.6's mask-FX outlines are
+    all this. */
+inline void drawDashedRect(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour c)
+{
+  const float dashes[]{3.0f, 3.0f};
+  const auto b = r.reduced(0.5f);
+
+  g.setColour(c);
+  for (auto line : {juce::Line<float>(b.getTopLeft(), b.getTopRight()),
+                    juce::Line<float>(b.getBottomLeft(), b.getBottomRight()),
+                    juce::Line<float>(b.getTopLeft(), b.getBottomLeft()),
+                    juce::Line<float>(b.getTopRight(), b.getBottomRight())})
+    g.drawDashedLine(line, dashes, 2, 1.0f);
 }
 
 /** The outline width for a glyph, as opposed to a letterform.

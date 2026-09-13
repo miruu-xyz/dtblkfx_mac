@@ -51,7 +51,7 @@ public:
 
     setColour(juce::PopupMenu::backgroundColourId, bevelLight);
     setColour(juce::PopupMenu::textColourId, text);
-    setColour(juce::PopupMenu::highlightedBackgroundColourId, accentBright);
+    setColour(juce::PopupMenu::highlightedBackgroundColourId, selection);
     setColour(juce::PopupMenu::highlightedTextColourId, bevelLight);
     setColour(juce::PopupMenu::headerTextColourId, textFaint);
 
@@ -85,15 +85,104 @@ public:
     return fonts->value(juce::jmin(16.0f, box.getHeight() * 0.62f));
   }
 
-  juce::Font getPopupMenuFont() override { return fonts->value(15.0f); }
+  //============================================================================
+  // Menus -- Figma "Dropdown Menu" (3:130). One look for every PopupMenu in
+  // the plugin: the FX picker, the presets, and the right-click value menus.
+  // A picker that looked different from the menu beside it would read as two
+  // different widgets.
+
+  static constexpr int menuItemHeight = 22;
+  static constexpr int menuColumnWidth = 126;
+
+  juce::Font getPopupMenuFont() override { return fonts->value(14.0f); }
+
+  // Items sit flush against a 1px frame; V2's default of 2 leaves a gap the
+  // design does not have.
+  int getPopupMenuBorderSize() override { return 1; }
 
   void drawPopupMenuBackground(juce::Graphics& g, int width, int height) override
   {
-    // The design's dropdown is a plain white box with a thin grey edge -- no
-    // rounding, no shadow, which is what LookAndFeel_V4 would give it.
+    // A plain white box with a black edge -- no rounding, no shadow, which is
+    // what LookAndFeel_V4 would give it.
     g.fillAll(design::colour::bevelLight);
-    g.setColour(design::colour::bevelDarkSoft);
+    g.setColour(design::colour::text);
     g.drawRect(0, 0, width, height, 1);
+  }
+
+  void getIdealPopupMenuItemSize(const juce::String& text,
+                                 bool isSeparator,
+                                 int standardMenuItemHeight,
+                                 int& idealWidth,
+                                 int& idealHeight) override
+  {
+    if (isSeparator) {
+      idealWidth = menuColumnWidth;
+      idealHeight = 7;
+      return;
+    }
+
+    // ponytail: section headers are the only caller that passes -1, and
+    // HeaderItemComponent::getIdealSize (juce_PopupMenu.cpp) then adds half the
+    // height and a quarter of the width again. 15 comes back as the design's
+    // 22, and 100 as 125 -- narrower than the column, so a header never widens
+    // it. Tied to the vendored JUCE 7.0.12; an upgrade that drops that padding
+    // shows up as short headers, and the fix is a custom header component.
+    if (standardMenuItemHeight < 0) {
+      idealWidth = menuColumnWidth * 4 / 5;
+      idealHeight = 15;
+      return;
+    }
+
+    idealWidth = juce::jmax(menuColumnWidth, getPopupMenuFont().getStringWidth(text) + 5);
+    idealHeight = menuItemHeight;
+  }
+
+  void drawPopupMenuItem(juce::Graphics& g,
+                         const juce::Rectangle<int>& area,
+                         bool isSeparator,
+                         bool isActive,
+                         bool isHighlighted,
+                         bool isTicked,
+                         bool /*hasSubMenu*/,
+                         const juce::String& text,
+                         const juce::String& /*shortcutKeyText*/,
+                         const juce::Drawable* /*icon*/,
+                         const juce::Colour* /*textColour*/) override
+  {
+    using namespace design::colour;
+
+    if (isSeparator) {
+      g.setColour(bevelDarkSoft);
+      g.fillRect(area.reduced(3, 0).withSizeKeepingCentre(area.getWidth() - 6, 1));
+      return;
+    }
+
+    // Hover is the design's purple fill under a dashed yellow focus ring.
+    // The current value is marked by colour alone, not by a fill and not by a
+    // tick, so the two cannot be confused when the pointer is on another item.
+    const bool hot = isHighlighted && isActive;
+    if (hot) {
+      g.setColour(selection);
+      g.fillRect(area);
+      design::drawDashedRect(g, area.toFloat(), focusRing);
+    }
+
+    g.setFont(getPopupMenuFont());
+    g.setColour(!isActive ? textFaint : hot ? bevelLight : isTicked ? accent : design::colour::text);
+    g.drawText(text, area.withTrimmedLeft(3).withTrimmedRight(2), juce::Justification::centredLeft, true);
+  }
+
+  void drawPopupMenuSectionHeader(juce::Graphics& g,
+                                  const juce::Rectangle<int>& area,
+                                  const juce::String& sectionName) override
+  {
+    // 7px Player Sans at 40% black, sitting on the bottom of its row.
+    g.setFont(fonts->pixel(7.0f));
+    g.setColour(design::colour::menuHeader);
+    g.drawText(sectionName,
+               area.withTrimmedLeft(3).withTrimmedRight(2).withTrimmedBottom(4),
+               juce::Justification::bottomLeft,
+               true);
   }
 
   juce::Font getTextButtonFont(juce::TextButton&, int buttonHeight) override

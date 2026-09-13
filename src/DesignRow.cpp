@@ -233,6 +233,73 @@ void FreqLink::mouseUp(const MouseEvent&)
 }
 
 //==============================================================================
+PopupMenu buildFxTypeMenu(int currentEffect, std::vector<float>& valueForResult)
+{
+  // The engine knows which effects are masks. It has no equivalent for the
+  // stereo ones -- they are just the tail of the table, inside #ifdef STEREO --
+  // so those are named. An effect added later lands in NORMAL until it is
+  // listed here, which is the safe direction to be wrong in.
+  const StringArray stereo{"Vocode", "HarmMatchLR", "HarmMatchRL", "CrossMix", "WarpMix"};
+
+  int off = -1;
+  std::vector<int> normal, mask, stereoFx;
+  StringArray seen;
+
+  for (int i = 0; i < g_num_fx_1_0; ++i) {
+    auto* fx = GetFxRun1_0(i);
+    if (fx == nullptr)
+      continue;
+
+    // The original skipped "DoNotUse". The two adjacent no-op slots both report
+    // "Off", and a second one would be a duplicate nobody can tell apart.
+    const String name(fx->name());
+    if (name == "DoNotUse" || seen.contains(name))
+      continue;
+    seen.add(name);
+
+    if (name == "Off")
+      off = i;
+    else
+      (fx->isMask() ? mask : stereo.contains(name) ? stereoFx : normal).push_back(i);
+  }
+
+  // Ticked by name, so a row on the second "Off" slot still shows as Off.
+  auto* current = GetFxRun1_0(currentEffect);
+  const String currentName = current != nullptr ? current->name() : "";
+
+  PopupMenu menu;
+  valueForResult.clear();
+
+  auto add = [&](int i) {
+    valueForResult.push_back(BlkFxParam::getEffectTypeInv(i));
+    const String name(GetFxRun1_0(i)->name());
+    menu.addItem((int)valueForResult.size(), name, true, name == currentName);
+  };
+
+  if (off >= 0)
+    add(off);
+  menu.addSectionHeader("NORMAL");
+  for (int i : normal)
+    add(i);
+
+  menu.addColumnBreak();
+
+  // One empty row, so MASK FX sits level with NORMAL rather than beside "Off".
+  // Disabled, so it never highlights and can never be returned.
+  menu.addItem(PopupMenu::Item().setID(std::numeric_limits<int>::max()).setEnabled(false));
+
+  menu.addSectionHeader("MASK FX");
+  for (int i : mask)
+    add(i);
+
+  menu.addSectionHeader("STEREO FX");
+  for (int i : stereoFx)
+    add(i);
+
+  return menu;
+}
+
+//==============================================================================
 FxTypeCell::FxTypeCell(DtBlkFxAudioProcessor& p, int s)
     : processor(p)
     , param(*p.apvts.getParameter(
@@ -303,7 +370,7 @@ void FxTypeCell::paint(Graphics& g)
   g.fillRect(bounds.getRight() - 1, bounds.getY(), 1, bounds.getHeight());
 
   if (menuOpen) {
-    g.setColour(colour::accentBright);
+    g.setColour(colour::selection);
     g.drawRect(bounds, 2);
   }
 
@@ -319,37 +386,15 @@ void FxTypeCell::paint(Graphics& g)
 
 void FxTypeCell::mouseDown(const MouseEvent&)
 {
-  PopupMenu menu;
-  menu.setLookAndFeel(&getLookAndFeel());
-
-  // Flat, in engine order, for now. 6.4 splits it into two columns under
-  // NORMAL / MASK FX / STEREO FX headers, which is the whole of that sub-phase.
   std::vector<float> values;
-  const int current = (int)BlkFxParam::getEffectType(param.getValue());
-  String previous;
-
-  for (int i = 0; i < g_num_fx_1_0; ++i) {
-    auto* fx = GetFxRun1_0(i);
-    if (fx == nullptr)
-      continue;
-
-    const String name(fx->name());
-
-    // The original skipped "DoNotUse"; the two adjacent no-op slots both report
-    // "Off", so the second would list a duplicate nobody can tell apart.
-    if (name == "DoNotUse" || name == previous)
-      continue;
-    previous = name;
-
-    values.push_back(BlkFxParam::getEffectTypeInv(i));
-    menu.addItem((int)values.size(), name, true, i == current);
-  }
+  auto menu = buildFxTypeMenu((int)BlkFxParam::getEffectType(param.getValue()), values);
+  menu.setLookAndFeel(&getLookAndFeel());
 
   menuOpen = true;
   repaint();
 
   menu.showMenuAsync(
-      PopupMenu::Options().withTargetComponent(this).withMinimumWidth(getWidth()),
+      PopupMenu::Options().withTargetComponent(this),
       [safe = Component::SafePointer<FxTypeCell>(this), values](int result) {
         // The host can close the editor while the menu is still up.
         auto* self = safe.getComponent();
@@ -458,14 +503,9 @@ void FxRow::paint(Graphics& g)
   const bool on = isOn();
 
   // The dashed border, #999DA6, dimmed with everything else when bypassed.
-  const float dashes[]{3.0f, 3.0f};
-  auto b = getLocalBounds().toFloat().reduced(0.5f);
-  g.setColour(colour::rowOutline.withAlpha(on ? 1.0f : bypassedAlpha));
-  for (auto line : {Line<float>(b.getTopLeft(), b.getTopRight()),
-                    Line<float>(b.getBottomLeft(), b.getBottomRight()),
-                    Line<float>(b.getTopLeft(), b.getBottomLeft()),
-                    Line<float>(b.getTopRight(), b.getBottomRight())})
-    g.drawDashedLine(line, dashes, 2, 1.0f);
+  drawDashedRect(g,
+                 getLocalBounds().toFloat(),
+                 colour::rowOutline.withAlpha(on ? 1.0f : bypassedAlpha));
 
   // The two glyphs. Same treatment as the header's: a hovered one brightens the
   // ground behind it, because at 9px the glyph alone is too small to read as a

@@ -91,6 +91,19 @@ private:
 };
 
 //==============================================================================
+/** The FX-type menu, Figma "Dropdown Menu" (3:130).
+
+    Two columns: "Off" and the NORMAL effects on the left; MASK FX and STEREO FX
+    on the right, dropped one row so the two column headers sit level. Engine
+    order within each group, engine names throughout -- the manual uses them,
+    and so does the host.
+
+    `valueForResult[id - 1]` is the FX_TYPE value behind each result id. Free
+    rather than a member so the test binary can render the real menu.
+*/
+juce::PopupMenu buildFxTypeMenu(int currentEffect, std::vector<float>& valueForResult);
+
+//==============================================================================
 /** The effect picker: a 128 x 26 bevelled cell that pops a menu.
 
     Deliberately not a `juce::ComboBox`. A ComboBox's frame can be restyled

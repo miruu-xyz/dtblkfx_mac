@@ -250,12 +250,56 @@ the same reason: the row and the chrome are separate diffs.
 generated markup puts no opacity on that text, but its own render reads lighter
 than the `Clip` beside it, so this is a judgment call rather than a measurement.
 
-### 6.4 — FX type menu
+### 6.4 — FX type menu ✅
 
 Two-column `PopupMenu` with `addSectionHeader` for NORMAL / MASK FX / STEREO
 FX, per the Components frame. This is also the roadmap's "group the mask
 effects so they stop looking broken" item — the design already specifies the
 grouping exactly. Small and self-contained.
+
+**Settled before starting (grilled 2026-09-13):**
+
+- **Engine names, not the Figma's spellings.** The design writes `---`,
+  `Thresh`, `ShiftConst` and `HarmFilter`; the engine says `Off`, `Threshold`,
+  `ConstShift` and `HarmFilt`. The manual and the host both use the engine's,
+  so a row set to `Off` reads `Off`. A *bypassed* row still reads `---`
+  (6.3b), which keeps "bypassed" and "set to Off" visibly different.
+- **The two column headers sit level.** In the Figma column 2 is vertically
+  centred against column 1, which puts `MASK FX` beside `Contrast`. JUCE
+  top-aligns columns; one disabled empty row at the top of column 2 puts
+  `MASK FX` beside `NORMAL` instead, which reads as a grid.
+- **Hover is the design's purple fill under a dashed yellow focus ring.** The
+  current effect is marked by accent-purple text alone -- no fill, no tick -- so
+  it cannot be mistaken for the hover when the pointer is elsewhere.
+- **One menu look for the whole plugin.** The spec lives in `RetroLookAndFeel`,
+  so the presets and every right-click value menu get it too. The frame is 1px
+  black now, replacing 6.2's thin grey.
+- **JUCE's default placement**: below the picker, flipping above when there is
+  no room on screen.
+
+**What 6.4 landed:**
+
+- `design::buildFxTypeMenu` in `DesignRow.cpp`. Free rather than a member of
+  `FxTypeCell`, so the test binary can render the real thing. Masks are grouped
+  by the engine's own `isMask()`; there is no stereo equivalent -- those five
+  are just the tail of the table under `#ifdef STEREO` -- so they are named, and
+  an effect added later falls into NORMAL until it is listed, which is the safe
+  direction to be wrong in.
+- `RetroLookAndFeel`: 22px rows, 126px columns, 14px Xenon items, 7px Player
+  Sans headers at 40% black, a 1px border instead of V2's 2. **Section headers
+  lean on a JUCE internal**: `HeaderItemComponent::getIdealSize` adds half the
+  height and a quarter of the width to whatever the LookAndFeel returns, and
+  headers are the only caller that passes `standardMenuItemHeight = -1`. So a
+  header asks for 15 x 100 and comes back 22 x 125. Marked `ponytail:` in the
+  source; if a JUCE upgrade drops the padding, headers come out short and the
+  fix is a custom header component.
+- `design::drawDashedRect` in the palette -- the row border, the menu's focus
+  ring, and 6.6's mask outlines are all the same thing.
+- The open picker's border is `#8A38F5`, the design's value, rather than the
+  `accentBright` 6.3b used by mistake.
+
+**Open for QA:** the hover's dashed yellow ring. The render shows layout, the
+current-item colour and the headers, but a snapshot cannot show a hover.
 
 ### 6.5 — Frequency and amp coordinate model
 
@@ -300,7 +344,9 @@ on the row rewrite.
 ./build/dtblkfx_paramtext --shot window.png
 ```
 
-Renders the real editor offscreen to a PNG. The Standalone build must not be
+Renders the real editor offscreen to a PNG. `--menu-shot <file.png>` does the
+same for the FX-type menu, which `--shot` cannot see because a `PopupMenu` is a
+separate desktop window; it flashes on screen for a moment. The Standalone build must not be
 launched unattended -- JUCE's wrapper opens the default audio input *and*
 output and can feed back through monitors (CLAUDE.md) -- and this is the
 substitute. With no arguments the same binary still runs the parameter checks.

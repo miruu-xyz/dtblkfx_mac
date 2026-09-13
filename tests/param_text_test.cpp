@@ -14,7 +14,9 @@
  */
 
 #include "DesignPalette.h"
+#include "DesignRow.h"
 #include "DtBlkFxProcessor.h"
+#include "RetroLookAndFeel.h"
 #include <cstdio>
 
 namespace {
@@ -34,6 +36,23 @@ juce::AudioProcessorParameter* get(DtBlkFxAudioProcessor& p, const juce::String&
   auto* param = p.apvts.getParameter(id);
   check(param != nullptr, "missing parameter " + id);
   return param;
+}
+
+// For the two render modes below.
+int writePng(const juce::Image& image, const char* path)
+{
+  const juce::File out(juce::File::getCurrentWorkingDirectory().getChildFile(path));
+  out.deleteFile();
+
+  juce::FileOutputStream stream(out);
+  juce::PNGImageFormat png;
+  if (!stream.openedOk() || !png.writeImageToStream(image, stream)) {
+    std::printf("could not write %s\n", out.getFullPathName().toRawUTF8());
+    return 1;
+  }
+
+  std::printf("wrote %s (%dx%d)\n", out.getFullPathName().toRawUTF8(), image.getWidth(), image.getHeight());
+  return 0;
 }
 
 // Type text back in and it must print the same thing.
@@ -104,22 +123,34 @@ int main(int argc, char** argv)
       return 1;
     }
 
-    const juce::File out(juce::File::getCurrentWorkingDirectory().getChildFile(argv[2]));
-    const auto image = editor->createComponentSnapshot(editor->getLocalBounds(), true);
+    return writePng(editor->createComponentSnapshot(editor->getLocalBounds(), true), argv[2]);
+  }
 
-    out.deleteFile();
-    juce::FileOutputStream stream(out);
-    juce::PNGImageFormat png;
-    if (!stream.openedOk() || !png.writeImageToStream(image, stream)) {
-      std::printf("could not write %s\n", out.getFullPathName().toRawUTF8());
+  // `--menu-shot <file.png>` renders the FX-type menu. A PopupMenu is its own
+  // desktop window, so `--shot` never sees one -- but showMenuAsync builds and
+  // lays that window out synchronously, so it can be snapshotted before any
+  // message loop runs. The window does briefly exist on screen.
+  if (argc == 3 && juce::String(argv[1]) == "--menu-shot") {
+    juce::ScopedJuceInitialiser_GUI gui;
+    RetroLookAndFeel lnf;
+
+    std::vector<float> values;
+    auto menu = design::buildFxTypeMenu(4 /* Clip, so the current-item colour shows */, values);
+    menu.setLookAndFeel(&lnf);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea({200, 200, 128, 26}));
+
+    auto& desktop = juce::Desktop::getInstance();
+    auto* window = desktop.getNumComponents() > 0
+                       ? desktop.getComponent(desktop.getNumComponents() - 1)
+                       : nullptr;
+    if (window == nullptr) {
+      std::printf("no menu window\n");
       return 1;
     }
 
-    std::printf("wrote %s (%dx%d)\n",
-                out.getFullPathName().toRawUTF8(),
-                image.getWidth(),
-                image.getHeight());
-    return 0;
+    const int rc = writePng(window->createComponentSnapshot(window->getLocalBounds(), true), argv[2]);
+    juce::PopupMenu::dismissAllActiveMenus();
+    return rc;
   }
 
   using namespace BlkFxParam;
