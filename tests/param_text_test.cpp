@@ -16,6 +16,7 @@
 #include "DesignAxis.h"
 #include "DesignPalette.h"
 #include "DesignRow.h"
+#include "DtBlkFxEditor.h"
 #include "DtBlkFxProcessor.h"
 #include "RetroLookAndFeel.h"
 #include <algorithm>
@@ -56,6 +57,38 @@ int writePng(const juce::Image& image, const char* path)
 
   std::printf("wrote %s (%dx%d)\n", out.getFullPathName().toRawUTF8(), image.getWidth(), image.getHeight());
   return 0;
+}
+
+// Every row state at once: a live mask pair, crossed handles, an inert mask
+// pair, a bypassed row, an Off row, and a mask on the last row with nothing
+// below it. Used by `--demo-shot` and by the mask-outline check.
+void setUpDemo(DtBlkFxAudioProcessor& processor)
+{
+  using namespace BlkFxParam;
+  auto set = [&](int row, int fxParam, float v) {
+    processor.apvts.getParameter(DtBlkFxAudioProcessor::paramId(paramOffs(row) + fxParam))
+        ->setValueNotifyingHost(v);
+  };
+  auto fx = [&](int row, const char* name) {
+    auto* p = processor.apvts.getParameter(DtBlkFxAudioProcessor::paramId(paramOffs(row) + FX_TYPE));
+    p->setValueNotifyingHost(p->getValueForText(name));
+  };
+  auto row = [&](int r, const char* name, float a, float b, float amp) {
+    fx(r, name);
+    set(r, FX_FREQ_A, a);
+    set(r, FX_FREQ_B, b);
+    set(r, FX_AMP, amp);
+  };
+
+  row(0, "Contrast", 0.30f, 0.70f, 0.75f);   // a plain range, +15 dB
+  row(1, "HarmMask", 0.45f, 1.00f, 0.60f);   // live mask -> outlines 1-2
+  row(2, "Clip", 0.80f, 0.40f, 0.35f);       // crossed: a notch
+  row(3, "ThreshMask", 0.00f, 1.00f, 0.60f); // inert mask: Vocode ignores it
+  row(4, "Vocode", 0.20f, 0.90f, 0.60f);
+  row(5, "Filter", 0.10f, 0.50f, 0.30f);     // bypassed
+  processor.apvts.getParameter(DtBlkFxAudioProcessor::fxOnId(5))->setValueNotifyingHost(0.0f);
+  fx(6, "Off");
+  row(7, "AutoHarmMask", 0.25f, 0.60f, 0.60f); // last row: nothing below
 }
 
 // Type text back in and it must print the same thing.
@@ -114,11 +147,17 @@ int main(int argc, char** argv)
   // the checks. The GUI phases need a way to see the window without launching
   // the Standalone, which opens the default audio input *and* output and can
   // feed back through monitors (see CLAUDE.md).
-  if (argc == 3 && juce::String(argv[1]) == "--shot") {
+  // `--demo-shot <file.png>` is `--shot` with setUpDemo's rows.
+  const bool demo = argc == 3 && juce::String(argv[1]) == "--demo-shot";
+
+  if (argc == 3 && (juce::String(argv[1]) == "--shot" || demo)) {
     juce::ScopedJuceInitialiser_GUI gui;
 
     DtBlkFxAudioProcessor processor;
     processor.prepareToPlay(44100.0, 512);
+
+    if (demo)
+      setUpDemo(processor);
 
     std::unique_ptr<juce::AudioProcessorEditor> editor(processor.createEditor());
     if (editor == nullptr) {
@@ -360,6 +399,34 @@ int main(int argc, char** argv)
       const BlkFxParam::Delay d(delay->getDefaultValue());
       check(d.getUnits() == BlkFxParam::Delay::BEATS && std::abs(d.getAmount() - 1.0f) < 0.01f,
             "Delay does not default to 1 beat");
+    }
+  }
+
+  // --- Phase 6.6b: when a mask outline is live -------------------------------
+  // A mask only shapes the row below when both are running and the effect below
+  // goes through MaskedRun. Anything else gets the faint outline, so a mask
+  // that is silently doing nothing shows it.
+  {
+    juce::ScopedJuceInitialiser_GUI gui;
+    DtBlkFxAudioProcessor demo;
+    demo.prepareToPlay(44100.0, 512);
+    setUpDemo(demo);
+
+    std::unique_ptr<juce::AudioProcessorEditor> editor(demo.createEditor());
+    if (auto* e = dynamic_cast<DtBlkFxEditor*>(editor.get())) {
+      const std::vector<int> expected{0, 2, 0, 1, 0, 0, 0, 1};
+      const auto got = e->maskOutlines();
+      juce::String text;
+      for (int v : got)
+        text << v << " ";
+      check(got == expected, "mask outlines read " + text.trim() + ", not 0 2 0 1 0 0 0 1");
+
+      // Bypassing the row below a live mask makes it inert.
+      demo.apvts.getParameter(DtBlkFxAudioProcessor::fxOnId(2))->setValueNotifyingHost(0.0f);
+      check(e->maskOutlines()[1] == 1, "a mask over a bypassed row still reads as live");
+    }
+    else {
+      check(false, "createEditor() did not return a DtBlkFxEditor");
     }
   }
 

@@ -44,6 +44,12 @@ public:
   ~DtBlkFxEditor() override;
 
   void paint(juce::Graphics&) override;
+  void paintOverChildren(juce::Graphics&) override;
+
+  /** The mask outlines span two rows, so they are the editor's to paint. One
+      entry per row -- 0 none, 1 an inert pairing, 2 a live one. Public so the
+      parameter-text check can assert it. */
+  std::vector<int> maskOutlines() const;
   void resized() override;
 
   void timerCallback() override;
@@ -114,6 +120,8 @@ private:
   // Interpolation State
   bool isInterpolating = false;
   int textRefreshTick = 0;
+
+  std::vector<int> shownMaskOutlines;
   double interpolationTime = 0.0;
   double interpolationDuration = 0.0;
   std::map<juce::String, float> startValues;

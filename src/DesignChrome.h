@@ -79,6 +79,10 @@ public:
 
   bool isHovered() const { return hovered; }
 
+  /** Open the inline editor. Public so a row's frequency handle can open the
+      same editor as the readout it belongs to. */
+  void showEditor();
+
   /** Full travel in roughly 200px of drag, on either axis. The original's
       sliders were about a window-width wide, so this is the same order of
       sensitivity. */
@@ -103,11 +107,15 @@ protected:
       decreases it because the readout is inverted. */
   virtual float dragSign() const { return 1.0f; }
 
+  /** Called after every change made through this control -- drag, menu, typed
+      entry or reset. A row value uses it to move its wedge or handles at once
+      rather than on the editor's next poll. */
+  virtual void valueChanged() {}
+
   juce::RangedAudioParameter& param;
 
 private:
   void showMenu();
-  void showEditor();
 
   bool hovered = false, dragging = false;
   float valueAtDragStart = 0.0f;

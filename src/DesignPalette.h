@@ -55,7 +55,14 @@ inline const juce::Colour warning{0xffd20000};   // the BlkLen "*"
 // FX rows
 inline const juce::Colour rowOutline{0xff999da6}; // dashed border
 inline const juce::Colour fieldFill{0x33ffffff};  // dropdown, rgba(255,255,255,0.2)
-inline const juce::Colour rangeDim{0x4dffffff};   // outside the frequency range
+// The frequency window (Figma 5:285): rgba(255,255,255,0.6) over everything
+// outside the range, at half strength until the pointer is over the row.
+inline const juce::Colour rangeDim{0x4dffffff};      // 0.6 x 50%, resting
+inline const juce::Colour rangeDimHover{0x99ffffff}; // 0.6, row hovered
+
+// The amp wedge (Figma 6:1659 / 6:1661).
+inline const juce::Colour wedge{0xffcdb9dc};
+inline const juce::Colour wedgeBypassed{0x4dc1c1c1}; // #C1C1C1 through a 30% mask
 
 // Menus (Figma 3:130) and the open picker's border (Figma 6:485).
 inline const juce::Colour selection{0xff8a38f5};  // menu hover fill, open-picker border
@@ -166,11 +173,15 @@ struct Glyphs {
       , help(parse("M8.0625 15.1875V11.9375H11.3125V15.1875H8.0625ZM6.4375 7.0625V5.4375H8.0625V7"
                    ".0625H6.4375ZM8.0625 10.3125V8.6875H9.6875V7.0625H11.3125V5.4375H8.0625V3.812"
                    "5H12.9375V5.4375H14.5625V8.6875H12.9375V10.3125H8.0625Z"))
+      // 9 x 7, pointing up: the min-frequency handle as exported. The max
+      // handle is the same shape flipped, which is how the design builds it.
+      , freqHandle(parse("M4.5 0L0 7H9L4.5 0Z"))
   {
   }
 
   juce::Path lockLocked, lockUnlocked, lockLockedSmall, lockUnlockedSmall;
   juce::Path power, beatSyncOn, beatSyncOff, beatSyncCross, help;
+  juce::Path freqHandle;
 
   /** Every beat-sync part is drawn on this grid. The arrows occupy 0..9 of it
       in both states, so they land identically whichever state is showing; the

@@ -381,6 +381,7 @@ DtBlkFxEditor::DtBlkFxEditor(DtBlkFxAudioProcessor& p)
   }
 
   setSize(windowWidth, windowHeight);
+  shownMaskOutlines = maskOutlines();
   startTimerHz(60);
 }
 
@@ -418,6 +419,16 @@ void DtBlkFxEditor::timerCallback()
     header.refreshTexts();
     for (auto& row : paramRows)
       row->refresh();
+
+    // Repaint the outlines only when one actually changed -- repainting the
+    // rows' area redraws every row's glyphs.
+    if (auto outlines = maskOutlines(); outlines != shownMaskOutlines) {
+      shownMaskOutlines = std::move(outlines);
+      if (!paramRows.empty())
+        repaint(paramRows.front()->getBounds()
+                    .getUnion(paramRows.back()->getBounds())
+                    .expanded(1));
+    }
   }
 }
 
@@ -425,6 +436,43 @@ void DtBlkFxEditor::paint(juce::Graphics& g)
 {
   g.fillAll(design::colour::windowBg);
   RetroLookAndFeel::drawBevel(g, getLocalBounds(), true);
+}
+
+std::vector<int> DtBlkFxEditor::maskOutlines() const
+{
+  // Figma 6:662: a mask row and the row below it get a solid purple outline.
+  // Solid when the mask is actually shaping something; faint when the pairing
+  // exists but does nothing -- the mask bypassed, the row below bypassed or on
+  // an effect that ignores masks, or no row below at all. That second case is
+  // the roadmap's "masks look broken": they were silently doing nothing.
+  std::vector<int> state(paramRows.size(), 0);
+
+  for (size_t i = 0; i < paramRows.size(); ++i) {
+    auto* fx = paramRows[i]->effect();
+    if (fx == nullptr || !fx->isMask())
+      continue;
+
+    const bool live = paramRows[i]->isOn() && i + 1 < paramRows.size() &&
+                      paramRows[i + 1]->isOn() &&
+                      design::consumesMask(paramRows[i + 1]->effect());
+    state[i] = live ? 2 : 1;
+  }
+  return state;
+}
+
+void DtBlkFxEditor::paintOverChildren(juce::Graphics& g)
+{
+  for (size_t i = 0; i < shownMaskOutlines.size(); ++i) {
+    if (shownMaskOutlines[i] == 0)
+      continue;
+
+    auto area = paramRows[i]->getBounds();
+    if (i + 1 < paramRows.size())
+      area = area.getUnion(paramRows[i + 1]->getBounds());
+
+    g.setColour(design::colour::selection.withAlpha(shownMaskOutlines[i] == 2 ? 1.0f : 0.3f));
+    g.drawRect(area, 1);
+  }
 }
 
 void DtBlkFxEditor::resized()

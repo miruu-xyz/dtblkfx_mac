@@ -394,18 +394,79 @@ work rather than drawing.
 directly with pinned values and never sees a JUCE default. `dtblkfx_paramtext`
 checks the two new defaults.
 
-### 6.6 — Row interactions
+### 6.6b — Row interactions ✅
 
-The amp wedge, the frequency window with its two dimming overlays
-(`rgba(255,255,255,0.6)` at 50%), the draggable min (bottom-left) and max
-(top-right) triangle handles, and the Mask-FX rule from the Interactions frame:
-selecting a Mask effect outlines **that row and the one below it** in dashed
-purple.
+The amp wedge, the frequency window with its two dimming overlays, the
+draggable min and max triangle handles, and the Mask-FX rule from the
+Interactions frame (`6-662`).
 
-**The wedge in the Figma is eyeballed.** It is a hand-drawn `Vector 3` with a
-420px rectangle over it, not a plot of anything. The plugin's wedge should
-match the actual behaviour split, which changes once dry/wet becomes a gain —
-so take the geometry from the engine, not from the design file.
+**Settled before starting (grilled 2026-09-13):**
+
+- **The wedge is the design as drawn, at the engine's true 0 dB.** The Figma's
+  shape (`Vector 3`) is a ramp from nothing at the left edge to full height at
+  x = 370.1 of 618 -- 0.599, which *is* the engine's 0 dB point -- then full
+  height to the right edge. Only the purple fill was eyeballed: a 420px
+  rectangle, i.e. +8 dB, under a row reading `0.0dB`. So the kink already sits
+  on the split: below it the ramp is wet % for the ten mix-mode effects and
+  attenuation for the rest, above it is gain. Filled `#CDB9DC` from the left
+  edge to the current amp, nothing drawn past it. The wedge spans the whole row,
+  as in the Figma; the frequency axis is the one inset 5px each side.
+- **The handles cross freely.** A is always the bottom triangle, B the top. With
+  A above B the engine processes the *outside* of the range
+  (`SplitMaskProcess`), so the dimming flips to the band between them.
+- **What an effect does not use is not drawn.** An unused frequency hides its
+  handle; the window and its dimming need both frequencies, so HarmMask (whose
+  one frequency is a fundamental, not a range edge) shows a lone A handle; an
+  unused amp hides the wedge. All decided by the *parked* effect.
+- **Only the triangles are grabbable**, padded to about 15 x 12 and hit-tested
+  above the cells. Horizontal and absolute, keeping the offset they were grabbed
+  at so they never jump. Left-right cursor; accent purple on hover and while
+  dragged; the row stays in its hover state for the whole drag. Double-click
+  opens the same inline editor as the handle's readout; option-click resets
+  (6.6a); right-click does nothing. The wedge and the window are display-only.
+- **The mask outline is solid `#8A38F5`** around the mask row and the row below
+  -- not dashed, as this file used to say. **Solid when live, 30% when the
+  pairing does nothing**: the mask bypassed, the row below bypassed, `Off`, or
+  on an effect that ignores masks, or no row below at all (a mask on row 8
+  outlines itself alone). That is the roadmap's "masks look broken" item: they
+  were silently doing nothing, and now they show it.
+- **A bypassed row** keeps its wedge in grey (`#C1C1C1` at 30%) and its window
+  and handles at 20%, as Variant3 draws it -- and the handles stay draggable,
+  as the cells stay editable, so a lane can be set up before it is switched on.
+
+**What 6.6b landed:**
+
+- `FxRow` paints, back to front: wedge, dimming, dashed border, glyphs. A
+  `HandleLayer` over the whole row paints the handles and claims the pointer
+  only over them -- its `hitTest` is false everywhere else, so clicks fall
+  through to the cells beneath without the cells knowing about it.
+- **`FxRow::refresh()` is the one way in.** Every change made inside the row
+  calls it at once -- cell drags through a new `DraggableValue::valueChanged()`
+  hook, the `↔` grip, the handles, the picker, power -- and the editor's 10Hz
+  poll calls it for automation. It compares against a cached `Shown` and
+  repaints only the strip each value moved across: a full-row repaint would also
+  rebuild the two glyphs' drop shadows on every drag event, which was most of
+  6.3b's sluggish drag. Crossing the handles, bypass and a change of effect
+  repaint the whole row, because they change *what* is drawn, not where.
+- **`paint` draws from that cache, not from the parameters**, so a partial
+  repaint can never show half of an old window and half of a new one.
+- `design::consumesMask` names the effects that *ignore* a mask -- `Off`, the
+  masks, Vocode, HarmMatchLR/RL -- since the engine has no flag. Taken from a
+  brace-matched read of every effect class's body. (Correcting the grilling:
+  the sweeps do consume masks. Triangles to Sweep are all `HarmMatchFx`, which
+  runs `MaskedRun`.)
+- The editor paints the outlines in `paintOverChildren`, recomputing them on
+  the 10Hz poll and repainting the rows only when one changes.
+- Long effect names (`AutoHarmMask`, `HarmRepitch`, `HarmMatchLR`) squash to
+  fit the picker, down to 75%, instead of being clipped. A 6.3b bug the demo
+  scene exposed.
+- `dtblkfx_paramtext --demo-shot <png>` renders every row state at once, and
+  the same scene backs a check of the mask-outline states. Marking Vocode as a
+  consumer makes it fail.
+
+**Open for QA** -- none of this can be seen in a still: the row-hover dimming
+going from 30% to 60%, handle hover and drag feel, the grab offset, the row
+staying lit through a drag, option-click and double-click on a handle.
 
 ### 6.7 — Spectrograms
 
@@ -429,7 +490,8 @@ on the row rewrite.
 ./build/dtblkfx_paramtext --shot window.png
 ```
 
-Renders the real editor offscreen to a PNG. `--menu-shot <file.png>` does the
+Renders the real editor offscreen to a PNG. `--demo-shot <file.png>` does the
+same with the rows set up to show every state at once (6.6b). `--menu-shot <file.png>` does the
 same for the FX-type menu, which `--shot` cannot see because a `PopupMenu` is a
 separate desktop window; it flashes on screen for a moment. The Standalone build must not be
 launched unattended -- JUCE's wrapper opens the default audio input *and*

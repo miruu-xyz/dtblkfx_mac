@@ -69,6 +69,7 @@ void DraggableValue::mouseDown(const juce::MouseEvent& e)
     param.beginChangeGesture();
     param.setValueNotifyingHost(param.getDefaultValue());
     param.endChangeGesture();
+    valueChanged();
     repaint();
     return;
   }
@@ -88,6 +89,7 @@ void DraggableValue::mouseDrag(const juce::MouseEvent& e)
   const auto delta = (float)(e.getDistanceFromDragStartX() - e.getDistanceFromDragStartY());
   param.setValueNotifyingHost(
       juce::jlimit(0.0f, 1.0f, valueAtDragStart + dragSign() * delta / dragRange));
+  valueChanged();
   repaint();
 }
 
@@ -144,6 +146,7 @@ void DraggableValue::showMenu()
         self->param.beginChangeGesture();
         self->param.setValueNotifyingHost(juce::jlimit(0.0f, 1.0f, value));
         self->param.endChangeGesture();
+        self->valueChanged();
         self->repaint();
       });
 }
@@ -177,6 +180,7 @@ void DraggableValue::showEditor()
     param.setValueNotifyingHost(
         juce::jlimit(0.0f, 1.0f, valueForDisplayText(editor->getText())));
     param.endChangeGesture();
+    valueChanged();
     dismiss();
   };
 }

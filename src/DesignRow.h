@@ -11,9 +11,9 @@
     frequencies that moves both together, a bevelled effect picker, and the
     lock and power glyphs. Everything paints itself.
 
-    Not here yet: the amp wedge and the frequency window with its dimming
-    overlays and triangle handles. Both need the shared Hz-to-pixel mapping
-    from 6.5 and land in 6.6.
+    Phase 6.6b adds what sits behind and above the cells: the amp wedge, the
+    frequency window with its dimming overlays, and the two triangle handles,
+    all laid out through DesignAxis.h so they line up with the spectrograms.
 
   ==============================================================================
 */
@@ -26,6 +26,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 class DtBlkFxAudioProcessor;
+class FxRun1_0;
 
 namespace design {
 
@@ -55,6 +56,7 @@ public:
 
 protected:
   std::vector<std::pair<float, juce::String>> menuEntries() override;
+  void valueChanged() override;
 
 private:
   DtBlkFxAudioProcessor& processor;
@@ -103,6 +105,15 @@ private:
 */
 juce::PopupMenu buildFxTypeMenu(int currentEffect, std::vector<float>& valueForResult);
 
+/** Whether `fx`, running in the row below a mask, is shaped by that mask.
+
+    Not an engine flag -- there is none. Every effect that processes through
+    `MaskedRun` / `AutoHarmMaskRun` in FxRun1_0.cpp consumes the mask above it,
+    and that is all of them except "Off", the masks themselves, Vocode and the
+    two HarmMatch stereo effects. Those are named, from a brace-matched read of
+    each effect class's body. */
+bool consumesMask(FxRun1_0* fx);
+
 //==============================================================================
 /** The effect picker: a 128 x 26 bevelled cell that pops a menu.
 
@@ -138,7 +149,9 @@ private:
 //==============================================================================
 /** A whole FX row.
 
-    Paints the dashed border and the two glyphs; everything else is a child.
+    Paints, back to front: the amp wedge, the frequency window's dimming, the
+    dashed border and the two glyphs. The cells sit on top of that, and the
+    two frequency handles on top of the cells.
 */
 class FxRow : public juce::Component {
 public:
@@ -154,10 +167,15 @@ public:
   void mouseDown(const juce::MouseEvent& e) override;
 
   bool isLocked() const { return locked; }
+  bool isOn() const;
 
-  /** Re-read everything from the parameters. The effect type decides what the
-      other four cells mean, and the frequencies also follow the block length,
-      which lives on another component entirely. */
+  /** The effect parked in the row -- what its parameter says, not what the
+      engine is running, which is "Off" while the row is bypassed. */
+  FxRun1_0* effect() const;
+
+  /** Re-read everything from the parameters and repaint only what moved. Every
+      change made from inside the row calls this at once; the editor's 10Hz poll
+      calls it to pick up automation and changes from the host. */
   void refresh();
 
   // Figma 5:276. The four value cells share what is left after these.
@@ -183,10 +201,49 @@ private:
     FxRow& row;
   };
 
+  /** The two frequency handles. A transparent layer over the whole row that
+      only claims the pointer over a handle -- `hitTest` is false everywhere
+      else, so clicks fall through to the cells and the row beneath. That is
+      what lets a handle win where it overlaps a cell without the cells having
+      to know about it. */
+  struct HandleLayer : public juce::Component {
+    explicit HandleLayer(FxRow& r);
+
+    void paint(juce::Graphics& g) override;
+    bool hitTest(int x, int y) override;
+    void mouseMove(const juce::MouseEvent& e) override;
+    void mouseExit(const juce::MouseEvent& e) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
+
+    /** 0 = min (A, bottom), 1 = max (B, top), -1 = neither. */
+    int handleAt(juce::Point<int> p) const;
+
+    FxRow& row;
+    int hot = -1, dragging = -1;
+    float grabOffset = 0.0f;
+  };
+
+  /** What is on screen, so a change repaints only the strip it moved across.
+      `paint` draws from this rather than from the parameters, so a partial
+      repaint can never show half of an old window and half of a new one. */
+  struct Shown {
+    float a = 0.0f, b = 1.0f, amp = 0.0f;
+    bool usesA = false, usesB = false, usesAmp = false, on = true;
+  };
+
+  Shown current() const;
+  void visualsChanged();
   void updateHover();
-  bool isOn() const;
+
+  juce::Range<float> freqSpan() const;
+  float freqX(int handle) const;
+  juce::Rectangle<float> handleBounds(int handle) const;
   juce::Rectangle<int> lockBounds() const;
   juce::Rectangle<int> powerBounds() const;
+  juce::RangedAudioParameter* fxParam(int fxParamIndex) const;
 
   DtBlkFxAudioProcessor& processor;
   LockHoverState& lockHover;
@@ -198,12 +255,11 @@ private:
   RowValue freqA, freqB, amp, value;
   FreqLink link;
   FxTypeCell type;
+  HandleLayer handles{*this};
   HoverRelay hoverRelay{*this};
 
-  // `hovered` drives nothing yet. The design's hover variant is mostly the
-  // frequency window's two dimming overlays coming up to full strength, and
-  // those arrive in 6.6; the picker deliberately does not follow it.
-  bool hovered = false, locked = false, shownOn = true;
+  Shown shown;
+  bool hovered = false, locked = false;
   int glyphHover = -1; // 0 = lock, 1 = power
 };
 
