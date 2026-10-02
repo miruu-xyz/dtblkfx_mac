@@ -61,6 +61,18 @@ void DraggableValue::mouseDown(const juce::MouseEvent& e)
     return;
   }
 
+  // Option-click puts the value back to its parameter default -- the same
+  // default the host resets to, so the two cannot disagree. Subclasses handle
+  // their own click targets (locks, sync, FILT/POWR) before calling this, so a
+  // toggle is never reset by accident.
+  if (e.mods.isAltDown()) {
+    param.beginChangeGesture();
+    param.setValueNotifyingHost(param.getDefaultValue());
+    param.endChangeGesture();
+    repaint();
+    return;
+  }
+
   valueAtDragStart = param.getValue();
   dragging = true;
   param.beginChangeGesture();
@@ -88,9 +100,10 @@ void DraggableValue::mouseUp(const juce::MouseEvent&)
   param.endChangeGesture();
 }
 
-void DraggableValue::mouseDoubleClick(const juce::MouseEvent&)
+void DraggableValue::mouseDoubleClick(const juce::MouseEvent& e)
 {
-  if (editor == nullptr)
+  // An option-double-click is two resets, not a reset and then an editor.
+  if (editor == nullptr && !e.mods.isAltDown())
     showEditor();
 }
 

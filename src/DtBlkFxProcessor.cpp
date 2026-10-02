@@ -378,7 +378,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout DtBlkFxAudioProcessor::creat
   addFloat(
       paramId(DELAY),
       "Delay",
-      0.0f,
+      // One beat, as docs/MANUAL.md documents ("By default it is set to 1
+      // beat"). The engine itself zeroes every parameter at startup, so this
+      // was 0 until Phase 6.6a -- and the delay caps the block length, so at
+      // zero BlkLen above roughly 0.3 did nothing on a fresh instance.
+      // Tempo-dependent: 500 ms at 120 BPM, and the engine's 4000-sample
+      // fallback when the host sends no tempo. It is real output delay, and
+      // setInitialDelay() is still a no-op, so the host does not compensate.
+      (float)Delay::beats(1.0f),
       [this](float v, int) { return coreParamText(DELAY, v); },
       [](const juce::String& t) {
         const auto s = t.trim().toLowerCase();
@@ -437,8 +444,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout DtBlkFxAudioProcessor::creat
       return juce::jlimit(0.0f, 1.0f, HzToNoteOffs(hz) / noteSpan());
     };
 
+    // A fresh row is fully open, 0 Hz to 25.8 kHz, which is what the design
+    // draws and what option-click on either handle returns to. The original
+    // started FreqB at 0 like everything else; nothing audible depends on it,
+    // since a fresh row is Filter at 0 dB and that is a no-op over any range.
     addFx(FX_FREQ_A, "FreqA", 0.0f, parseFreq);
-    addFx(FX_FREQ_B, "FreqB", 0.0f, parseFreq);
+    addFx(FX_FREQ_B, "FreqB", 1.0f, parseFreq);
 
     addFx(FX_AMP, "Amp", getAmpParam0dB(), [](const juce::String& t) {
       const auto s = t.trim().toLowerCase();

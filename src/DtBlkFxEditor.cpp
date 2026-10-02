@@ -177,7 +177,7 @@ DtBlkFxEditor::FooterComponent::FooterComponent(DtBlkFxEditor& e)
   presetBox.onChange = [&] {
     int id = presetBox.getSelectedId();
     if (id == 1)
-      owner.loadFactoryPreset(0); // Init
+      owner.loadInitPreset();
     else if (id == 2)
       owner.startRandomization(); // Random
     else if (id == 100)
@@ -324,41 +324,21 @@ void DtBlkFxEditor::loadPreset()
   });
 }
 
-void DtBlkFxEditor::loadFactoryPreset(int index)
+void DtBlkFxEditor::loadInitPreset()
 {
+  // Init is a fresh instance: every parameter to its own default. It used to be
+  // a hand-copied list of values, which drifted the moment a default changed.
+  // The limiter stays out of it, as it does for RANDOM -- it is not part of the
+  // original plugin and is not in the layout yet.
   startValues.clear();
   targetValues.clear();
 
-  auto setById = [&](const juce::String& paramID, float val) {
-    targetValues[paramID] = val;
-    if (auto* p = audioProcessor.apvts.getParameter(paramID))
-      startValues[paramID] = p->getValue();
-  };
-  auto setParam = [&](int id, float val) {
-    const auto paramID = DtBlkFxAudioProcessor::paramId(id);
-    if (paramID.isNotEmpty())
-      setById(paramID, val);
-  };
-
-  // Reset all first
-  for (int i = 0; i < BlkFxParam::TOTAL_NUM; ++i) {
-    setParam(i, 0.0f); // Default 0
-  }
-  setById(DtBlkFxAudioProcessor::mixBackId, 0.0f);
-  setById(DtBlkFxAudioProcessor::powerId, 1.0f);
-  setById(DtBlkFxAudioProcessor::overlapId, 0.0f);
-  setById(DtBlkFxAudioProcessor::syncId, 0.0f);
-
-  // Apply specific settings
-  if (index == 0) { // Init
-    setById(DtBlkFxAudioProcessor::mixBackId, 0.0f); // Mix Dry
-    setParam(2, 0.5f);                               // BlkLen
-    setById(DtBlkFxAudioProcessor::overlapId, 1.0f); // Overlap
-  }
-  else if (index == 1) {                             // Vocoder-ish
-    setById(DtBlkFxAudioProcessor::mixBackId, 1.0f); // Wet
-    setParam(2, 0.7f);                               // BlkLen
-  }
+  for (auto* p : audioProcessor.getParameters())
+    if (auto* param = dynamic_cast<juce::RangedAudioParameter*>(p))
+      if (!param->paramID.startsWith("limiter")) {
+        startValues[param->paramID] = param->getValue();
+        targetValues[param->paramID] = param->getDefaultValue();
+      }
 
   // Trigger interpolation (short)
   isInterpolating = true;

@@ -348,6 +348,21 @@ int main(int argc, char** argv)
     checkTextRoundTrip(p, DtBlkFxAudioProcessor::fxOnId(0));
   }
 
+  // --- Phase 6.6a: defaults ---------------------------------------------------
+  // A fresh row is fully open and a fresh instance has one beat of delay.
+  // Option-click and the host's own reset both go to these.
+  {
+    if (auto* freqB = get(p, set0(FX_FREQ_B)))
+      check(freqB->getDefaultValue() == 1.0f,
+            "FreqB defaults to " + juce::String(freqB->getDefaultValue()) + ", not 1 (25.8 kHz)");
+
+    if (auto* delay = get(p, DtBlkFxAudioProcessor::paramId(DELAY))) {
+      const BlkFxParam::Delay d(delay->getDefaultValue());
+      check(d.getUnits() == BlkFxParam::Delay::BEATS && std::abs(d.getAmount() - 1.0f) < 0.01f,
+            "Delay does not default to 1 beat");
+    }
+  }
+
   // --- Phase 6.5: the shared coordinate model --------------------------------
   // The rows' handles and the spectrogram columns must agree by construction,
   // so the model is checked here rather than by eye.

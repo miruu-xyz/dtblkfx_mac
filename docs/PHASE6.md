@@ -363,6 +363,37 @@ own mapping they will drift apart on screen and the alignment gets fixed twice.
   it. Taking the max over that range is what the original did; whether to drop
   it instead is a small 6.7 call.
 
+### 6.6a — Defaults and reset ✅
+
+Grilled 2026-09-13 as part of 6.6, landed separately because it is parameter
+work rather than drawing.
+
+- **Option-click resets a value to its parameter default** -- the same default
+  the host's own reset uses, so the two cannot disagree. It lives in
+  `DraggableValue::mouseDown`, so it covers every row value, the three headings
+  and the dry/wet gauge. Subclasses handle their own click targets first, so
+  locks, sync, FILT/POWR, power and the FX picker are never reset by accident.
+  It does nothing on the `↔` grip. An option-double-click is two resets, not a
+  reset and an editor. 6.6b's handles get it too.
+- **FreqB defaults to 25.8 kHz** (param 1.0), so a fresh row is fully open, as
+  the design draws it, and resetting the max handle opens the window rather than
+  collapsing it. Nothing audible depends on this: a fresh row is Filter at 0 dB,
+  a no-op over any range. (At 44.1 kHz it reads `22.1kHz`, the Nyquist bin.)
+- **Delay defaults to 1 beat**, which is what `docs/MANUAL.md` says it is. The
+  engine zeroes every parameter at startup, so it was effectively 0 before. At
+  zero the delay pinned BlkLen to its minimum block, so BlkLen above ~0.3 did
+  nothing on a fresh instance. **The cost: a fresh instance's output is one beat
+  late** (500 ms at 120 BPM), and `setInitialDelay()` is still a no-op, so Live
+  does not compensate. Accepted knowingly; latency reporting is its own job.
+- **Init is every parameter's default**, the limiter excepted, as with RANDOM.
+  It used to be a hand-copied list that had already drifted from the defaults in
+  three places: Delay, FreqB, and amp (-inf dB rather than 0 dB). That includes
+  switching every row back on, since bypass defaults to on.
+
+`check_audio.sh` is blind to all of this -- the harness drives the engine
+directly with pinned values and never sees a JUCE default. `dtblkfx_paramtext`
+checks the two new defaults.
+
 ### 6.6 — Row interactions
 
 The amp wedge, the frequency window with its two dimming overlays

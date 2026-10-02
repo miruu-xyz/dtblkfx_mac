@@ -53,7 +53,7 @@ public:
   void updateInterpolation();
   void savePreset();
   void loadPreset();
-  void loadFactoryPreset(int index);
+  void loadInitPreset();
 
   struct FooterComponent : public juce::Component {
     FooterComponent(DtBlkFxEditor& editor);

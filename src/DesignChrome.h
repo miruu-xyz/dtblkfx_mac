@@ -62,7 +62,8 @@ private:
     All four global controls were one widget in the original -- a
     `DtPopupHSlider`, which dragged *and* offered a menu of named values (see
     `dtblkfx_src/GlobalCtrl.cpp`). This keeps that: drag either axis to change
-    the value, right-click for the menu, double-click to type one in.
+    the value, right-click for the menu, double-click to type one in -- and
+    adds option-click to reset it to its parameter default.
 */
 class DraggableValue : public juce::Component {
 public:
