@@ -481,7 +481,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout DtBlkFxAudioProcessor::creat
 
     // Bypass, as an "on" so the row's power glyph lights when the row runs.
     // Not an engine parameter -- see fxOnId / pushFxType.
-    addBool(fxOnId(set), prefix + ": On", true, "on", "off");
+    //
+    // Only row 2 starts on: eight live rows made a fresh instance look messy
+    // and overwhelming.
+    addBool(fxOnId(set), prefix + ": On", set == 1, "on", "off");
   }
 
   // Limiter Parameters

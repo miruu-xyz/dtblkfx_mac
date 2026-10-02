@@ -54,9 +54,15 @@ public:
   /** Repaint only if what this cell reads has actually changed. */
   void refresh();
 
+  /** Show the hover box regardless of the pointer -- the `↔` grip uses it on
+      both frequency readouts, since it moves both. */
+  void setLinked(bool shouldBe);
+
 protected:
   std::vector<std::pair<float, juce::String>> menuEntries() override;
   void valueChanged() override;
+  float dragPixels() const override;
+  juce::Rectangle<int> editorBounds() const override;
 
 private:
   DtBlkFxAudioProcessor& processor;
@@ -64,6 +70,7 @@ private:
   int set;
   Which which;
   juce::String shown;
+  bool linked = false;
 };
 
 //==============================================================================
@@ -87,6 +94,8 @@ public:
   void mouseExit(const juce::MouseEvent& e) override;
 
 private:
+  void showLinked(bool on);
+
   juce::RangedAudioParameter* freq[2]{};
   float valueAtDragStart[2]{};
   bool dragging = false, hovered = false;
@@ -169,6 +178,13 @@ public:
   bool isLocked() const { return locked; }
   bool isOn() const;
 
+  /** Pixels across the row's frequency axis -- what a frequency drag is
+      scaled to, so it moves about as far as its handle does. */
+  float freqAxisLength() const { return freqSpan().getLength(); }
+
+  /** Both frequency readouts show their hover box -- for the `↔` grip. */
+  void setFreqsLinked(bool on);
+
   /** The effect parked in the row -- what its parameter says, not what the
       engine is running, which is "Off" while the row is bypassed. */
   FxRun1_0* effect() const;
@@ -197,6 +213,17 @@ private:
 
     void mouseEnter(const juce::MouseEvent&) override { row.updateHover(); }
     void mouseExit(const juce::MouseEvent&) override { row.updateHover(); }
+
+    // Re-checked on the next message, not inside mouseUp: the drag state is
+    // still settling while the release is being delivered, and if the pointer
+    // was let go outside the row there is no later enter or exit to catch it.
+    void mouseUp(const juce::MouseEvent&) override
+    {
+      juce::MessageManager::callAsync([safe = juce::Component::SafePointer<FxRow>(&row)] {
+        if (safe != nullptr)
+          safe->updateHover();
+      });
+    }
 
     FxRow& row;
   };
@@ -259,7 +286,12 @@ private:
   HoverRelay hoverRelay{*this};
 
   Shown shown;
-  bool hovered = false, locked = false;
+
+  // True while the pointer is on -- or dragging -- something that moves the
+  // frequency range: a frequency readout, the grip, or a handle. Only that
+  // brings the dimming up to full strength; the rest of the row does not.
+  bool rangeHot = false;
+  bool locked = false;
   int glyphHover = -1; // 0 = lock, 1 = power
 };
 

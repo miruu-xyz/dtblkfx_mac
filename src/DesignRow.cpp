@@ -15,9 +15,9 @@ namespace {
 
 using namespace juce;
 
-// The row's values are set at the design's 16px, the same cut and tracking as
-// the frequency and dB readouts it was drawn with.
-constexpr float valueSize = 16.0f;
+// The row's values, and the picker's effect name, at the design's 15px (Figma
+// 26:612). The drawn arrows keep their size so they stay legible.
+constexpr float valueSize = 15.0f;
 
 // A menu value below this is a command rather than a value to set. Matches
 // DesignChrome.cpp; the row has no commands yet, but getValue() must never be
@@ -81,6 +81,14 @@ FxRun1_0* parkedEffect(DtBlkFxAudioProcessor& p, int set)
 
 } // namespace
 
+/** Pixels of drag for a row value's full range: halfway between the
+    headings' fixed 200px and the distance its indicator travels on the row.
+    Exactly the indicator's distance felt slow; 200px was far too fast. */
+float rowDragPixels(float indicatorTravel)
+{
+  return (DraggableValue::dragRange + indicatorTravel) * 0.5f;
+}
+
 //==============================================================================
 RowValue::RowValue(DtBlkFxAudioProcessor& p, int s, Which w)
     : DraggableValue(*p.apvts.getParameter(DtBlkFxAudioProcessor::paramId(
@@ -100,11 +108,54 @@ RowValue::RowValue(DtBlkFxAudioProcessor& p, int s, Which w)
 {
 }
 
+juce::Rectangle<int> RowValue::editorBounds() const
+{
+  // Figma 26:612: inset 4px either side, 22px tall, centred. The two frequency
+  // boxes are inset further on the side facing the grip between them -- at 4px
+  // their edges ran right up against its arrowheads.
+  constexpr int inset = 4, nearGrip = 10;
+  auto box = getLocalBounds().withSizeKeepingCentre(getWidth(), 22);
+  box = box.withTrimmedLeft(which == Which::freqB ? nearGrip : inset)
+            .withTrimmedRight(which == Which::freqA ? nearGrip : inset);
+  return box;
+}
+
+void RowValue::setLinked(bool shouldBe)
+{
+  if (linked == shouldBe)
+    return;
+
+  linked = shouldBe;
+  repaint();
+}
+
+float RowValue::dragPixels() const
+{
+  // Scaled to how far the value's indicator travels on the row -- a frequency
+  // across the frequency axis, amp across the wedge, which spans the whole row
+  // -- so the rate follows the row's size. Value has no indicator; it takes the
+  // row's width so every cell in a row drags at the same rate.
+  if (auto* row = findParentComponentOfClass<FxRow>())
+    return rowDragPixels(which == Which::freqA || which == Which::freqB ? row->freqAxisLength()
+                                                                        : (float)row->getWidth());
+  return DraggableValue::dragPixels();
+}
+
 void RowValue::paint(Graphics& g)
 {
   // Plain black, centred. Unlike the global headings these carry no outline or
-  // shadow -- the design sets them flat, and the pointer is the affordance.
+  // shadow -- the design sets them flat.
   shown = displayText();
+
+  // The value under the pointer, or being dragged or typed into, sits in a
+  // pale box with a dashed edge (Figma 26:612), so it is clear which one a
+  // click will change.
+  if (isHovered() || isEditing() || linked) {
+    const auto box = editorBounds().toFloat();
+    g.setColour(colour::bevelLight.withAlpha(0.5f));
+    g.fillRect(box);
+    drawDashedRect(g, box, colour::rowOutline);
+  }
 
   g.setFont(fonts->value(valueSize));
   g.setColour(colour::text);
@@ -196,13 +247,24 @@ void FreqLink::paint(Graphics& g)
 void FreqLink::mouseEnter(const MouseEvent&)
 {
   hovered = true;
+  showLinked(true);
   repaint();
 }
 
 void FreqLink::mouseExit(const MouseEvent&)
 {
+  // During a drag JUCE holds off the exit until the button is released, so by
+  // the time this arrives the drag is over.
   hovered = false;
+  showLinked(false);
   repaint();
+}
+
+void FreqLink::showLinked(bool on)
+{
+  // The grip changes both frequencies, so both readouts take the hover box.
+  if (auto* row = findParentComponentOfClass<FxRow>())
+    row->setFreqsLinked(on);
 }
 
 void FreqLink::mouseDown(const MouseEvent&)
@@ -223,7 +285,11 @@ void FreqLink::mouseDrag(const MouseEvent& e)
   // The same delta into both, in parameter space. The frequency parameter is a
   // note offset, so an equal step moves both by the same interval and the range
   // keeps its width in musical terms rather than in Hz.
-  const float delta = (float)e.getDistanceFromDragStartX() / DraggableValue::dragRange;
+  // Scaled like the frequency readouts, so the grip and the readouts it moves
+  // drag at the same rate.
+  auto* row = findParentComponentOfClass<FxRow>();
+  const float pixels = row != nullptr ? rowDragPixels(row->freqAxisLength()) : DraggableValue::dragRange;
+  const float delta = (float)e.getDistanceFromDragStartX() / pixels;
 
   for (int i = 0; i < 2; ++i)
     if (freq[i] != nullptr)
@@ -242,6 +308,8 @@ void FreqLink::mouseUp(const MouseEvent&)
   for (int i = 0; i < 2; ++i)
     if (freq[i] != nullptr)
       freq[i]->endChangeGesture();
+
+  showLinked(isMouseOver());
 }
 
 //==============================================================================
@@ -475,6 +543,12 @@ bool FxRow::isOn() const
   return processor.apvts.getRawParameterValue(DtBlkFxAudioProcessor::fxOnId(set))->load() >= 0.5f;
 }
 
+void FxRow::setFreqsLinked(bool on)
+{
+  freqA.setLinked(on);
+  freqB.setLinked(on);
+}
+
 FxRun1_0* FxRow::effect() const
 {
   return parkedEffect(processor, set);
@@ -646,14 +720,15 @@ void FxRow::paint(Graphics& g)
   }
 
   // 2. The frequency window (Figma 5:285): white over everything the effect
-  //    does not touch. Half strength at rest, full under the pointer. With the
+  //    does not touch. Full strength only while the range is being worked --
+  //    pointer on a frequency readout, the grip or a handle. With the
   //    handles crossed the engine processes the *outside* of the range
   //    (SplitMaskProcess: "freqA > freqB : process outside region"), so the
   //    dimming flips to the band between them. Only drawn when the effect uses
   //    both frequencies: HarmMask's single frequency is a fundamental, not a
   //    range edge.
   if (shown.usesA && shown.usesB) {
-    auto dim = hovered ? colour::rangeDimHover : colour::rangeDim;
+    auto dim = rangeHot ? colour::rangeDimHover : colour::rangeDim;
     if (!shown.on)
       dim = colour::rangeDimHover.withMultipliedAlpha(0.2f); // Variant3: 0.6 x 20%
 
@@ -704,16 +779,23 @@ void FxRow::paint(Graphics& g)
 //------------------------------------------------------------------------------
 void FxRow::updateHover()
 {
-  // A handle drag keeps the row hovered even when the pointer leaves it, so the
-  // window does not drop to half strength mid-drag.
-  const bool now =
-      handles.dragging >= 0 || getLocalBounds().contains(getMouseXYRelative());
-  if (now == hovered)
+  // Over one of the range controls, or still dragging one even if the pointer
+  // has left it -- during a drag JUCE keeps the pressed component as the one
+  // "under" the mouse.
+  auto mouse = Desktop::getInstance().getMainMouseSource();
+  auto* pressed = mouse.isDragging() ? mouse.getComponentUnderMouse() : nullptr;
+  const auto p = getMouseXYRelative();
+
+  const bool now = (pressed != nullptr && (pressed == &freqA || pressed == &freqB ||
+                                           pressed == &link || pressed == &handles)) ||
+                   freqA.getBounds().contains(p) || freqB.getBounds().contains(p) ||
+                   link.getBounds().contains(p) || handles.handleAt(p) >= 0;
+  if (now == rangeHot)
     return;
 
-  hovered = now;
+  rangeHot = now;
 
-  // Hover only changes the dimming, and only where there is any.
+  // It only changes the dimming, and only where there is any.
   if (shown.usesA && shown.usesB)
     repaint();
 }
@@ -808,9 +890,12 @@ void FxRow::HandleLayer::paint(Graphics& g)
     if (h == 1)
       path.applyTransform(AffineTransform::verticalFlip(r.getHeight()).translated(0.0f, r.getY() * 2.0f));
 
-    // Variant3 fades the whole frequency visual to 20%, handles included.
+    // #999DA6 at rest, so they do not compete with the values; accent while
+    // hovered or dragged. Variant3 fades the whole frequency visual to 20%,
+    // handles included.
     const bool lit = hot == h || dragging == h;
-    g.setColour((lit ? colour::accentBright : colour::text).withMultipliedAlpha(row.shown.on ? 1.0f : 0.2f));
+    g.setColour((lit ? colour::accentBright : colour::rowOutline)
+                    .withMultipliedAlpha(row.shown.on ? 1.0f : 0.2f));
     g.fillPath(path);
   }
 }
@@ -819,8 +904,10 @@ void FxRow::HandleLayer::mouseMove(const MouseEvent& e)
 {
   const int was = hot;
   hot = handleAt(e.getPosition());
-  if (hot != was)
+  if (hot != was) {
     repaint();
+    row.updateHover();
+  }
 }
 
 void FxRow::HandleLayer::mouseExit(const MouseEvent&)

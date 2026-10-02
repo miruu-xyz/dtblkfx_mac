@@ -82,6 +82,7 @@ public:
   /** Open the inline editor. Public so a row's frequency handle can open the
       same editor as the readout it belongs to. */
   void showEditor();
+  bool isEditing() const { return editor != nullptr; }
 
   /** Full travel in roughly 200px of drag, on either axis. The original's
       sliders were about a window-width wide, so this is the same order of
@@ -106,6 +107,17 @@ protected:
   /** +1 for a control where dragging up increases the parameter, -1 where it
       decreases it because the readout is inverted. */
   virtual float dragSign() const { return 1.0f; }
+
+  /** Pixels of drag for the full 0..1 range. A row value overrides this so a
+      drag moves the value about as far as its indicator travels on the row. */
+  virtual float dragPixels() const { return dragRange; }
+
+  /** Where the inline editor sits. The headings put it over the readout at the
+      bottom; a row value puts it in its hover box. */
+  virtual juce::Rectangle<int> editorBounds() const
+  {
+    return getLocalBounds().removeFromBottom(juce::jmin(18, getHeight()));
+  }
 
   /** Called after every change made through this control -- drag, menu, typed
       entry or reset. A row value uses it to move its wedge or handles at once

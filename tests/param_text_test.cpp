@@ -85,10 +85,13 @@ void setUpDemo(DtBlkFxAudioProcessor& processor)
   row(2, "Clip", 0.80f, 0.40f, 0.35f);       // crossed: a notch
   row(3, "ThreshMask", 0.00f, 1.00f, 0.60f); // inert mask: Vocode ignores it
   row(4, "Vocode", 0.20f, 0.90f, 0.60f);
-  row(5, "Filter", 0.10f, 0.50f, 0.30f);     // bypassed
-  processor.apvts.getParameter(DtBlkFxAudioProcessor::fxOnId(5))->setValueNotifyingHost(0.0f);
+  row(5, "Filter", 0.10f, 0.50f, 0.30f);     // bypassed, below
   fx(6, "Off");
   row(7, "AutoHarmMask", 0.25f, 0.60f, 0.60f); // last row: nothing below
+
+  // Every row on except the bypassed one -- only row 2 is on by default.
+  for (int r = 0; r < NUM_FX_SETS; ++r)
+    processor.apvts.getParameter(DtBlkFxAudioProcessor::fxOnId(r))->setValueNotifyingHost(r == 5 ? 0.0f : 1.0f);
 }
 
 // Type text back in and it must print the same thing.
@@ -202,6 +205,11 @@ int main(int argc, char** argv)
   p.prepareToPlay(44100.0, 512);
 
   const auto set0 = [](int fxParam) { return DtBlkFxAudioProcessor::paramId(paramOffs(0) + fxParam); };
+
+  // Set 1 starts bypassed (6.6c), and a bypassed set prints "-" for everything
+  // -- which the round trips below skip. Without this they pass by checking
+  // nothing.
+  get(p, DtBlkFxAudioProcessor::fxOnId(0))->setValueNotifyingHost(1.0f);
 
   // Give the engine room: FFT_LEN and OVERLAP both display a block length,
   // which the delay caps, so at zero delay they are pinned to the minimum.
@@ -394,6 +402,13 @@ int main(int argc, char** argv)
     if (auto* freqB = get(p, set0(FX_FREQ_B)))
       check(freqB->getDefaultValue() == 1.0f,
             "FreqB defaults to " + juce::String(freqB->getDefaultValue()) + ", not 1 (25.8 kHz)");
+
+    // Only row 2 starts on.
+    for (int set = 0; set < NUM_FX_SETS; ++set)
+      if (auto* on = get(p, DtBlkFxAudioProcessor::fxOnId(set)))
+        check((on->getDefaultValue() >= 0.5f) == (set == 1),
+              "row " + juce::String(set + 1) + " defaults to " +
+                  (on->getDefaultValue() >= 0.5f ? "on" : "bypassed"));
 
     if (auto* delay = get(p, DtBlkFxAudioProcessor::paramId(DELAY))) {
       const BlkFxParam::Delay d(delay->getDefaultValue());

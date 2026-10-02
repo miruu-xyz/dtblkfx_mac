@@ -55,10 +55,12 @@ inline const juce::Colour warning{0xffd20000};   // the BlkLen "*"
 // FX rows
 inline const juce::Colour rowOutline{0xff999da6}; // dashed border
 inline const juce::Colour fieldFill{0x33ffffff};  // dropdown, rgba(255,255,255,0.2)
-// The frequency window (Figma 5:285): rgba(255,255,255,0.6) over everything
-// outside the range, at half strength until the pointer is over the row.
-inline const juce::Colour rangeDim{0x4dffffff};      // 0.6 x 50%, resting
-inline const juce::Colour rangeDimHover{0x99ffffff}; // 0.6, row hovered
+// The frequency window (Figma 5:285): white over everything outside the range.
+// Full strength while the pointer is on something that moves the range -- a
+// frequency readout, the grip, a handle. The resting strength is above the
+// design's half (0.3) so the range still reads at a glance.
+inline const juce::Colour rangeDim{0x66ffffff};      // 0.4, resting
+inline const juce::Colour rangeDimHover{0x99ffffff}; // 0.6, range being worked
 
 // The amp wedge (Figma 6:1659 / 6:1661).
 inline const juce::Colour wedge{0xffcdb9dc};

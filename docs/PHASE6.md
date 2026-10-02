@@ -386,6 +386,7 @@ work rather than drawing.
   late** (500 ms at 120 BPM), and `setInitialDelay()` is still a no-op, so Live
   does not compensate. Accepted knowingly; latency reporting is its own job.
 - **Init is every parameter's default**, the limiter excepted, as with RANDOM.
+  (Since the 6.6 follow-ups that includes only row 2 being on.)
   It used to be a hand-copied list that had already drifted from the defaults in
   three places: Delay, FreqB, and amp (-inf dB rather than 0 dB). That includes
   switching every row back on, since bypass defaults to on.
@@ -464,9 +465,45 @@ Interactions frame (`6-662`).
   the same scene backs a check of the mask-outline states. Marking Vocode as a
   consumer makes it fail.
 
-**Open for QA** -- none of this can be seen in a still: the row-hover dimming
-going from 30% to 60%, handle hover and drag feel, the grab offset, the row
-staying lit through a drag, option-click and double-click on a handle.
+**6.6 follow-ups.** A first review pass:
+
+- **Full-strength dimming only while the range is being worked** -- pointer on a
+  frequency readout, the `↔` grip or a handle, or still dragging one of them --
+  not anywhere on the row. Resting strength is up from the design's 0.3 to 0.4,
+  so the range reads at a glance. The release is re-checked on the next
+  message rather than inside `mouseUp`, because a drag let go outside the row
+  produces no later enter or exit to catch it.
+- **Row values are 15px**, values and effect name alike; the drawn `↔` and `↕`
+  keep their size.
+- **The value under the pointer, or being dragged or typed into, sits in a box**
+  (Figma 26:612): inset 4px, 22px tall, `rgba(255,255,255,0.5)` with a dashed
+  `#999DA6` edge. The inline editor now opens inside that box rather than over
+  the bottom of the cell. Lock and power are excluded, as asked. So are the
+  `↔` grip and the picker, which already have their own hover. The header
+  values are excluded too, since the note was about the rows.
+- **Only row 2 starts on**; the other seven start bypassed. Init follows, since
+  it is the defaults. RANDOM still never touches bypass, so randomising a fresh
+  instance only changes what row 2 audibly does.
+- **Handles are `#999DA6` at rest**, accent purple only while hovered or dragged.
+- **Row drags are halfway between the headings' rate and the indicator's
+  travel.** Full range takes `(200 + travel) / 2` pixels, where travel is the
+  frequency axis (630px) for the frequencies and the `↔` grip, and the wedge
+  (the whole row, 640px) for amp -- about 415px. Value has no indicator and
+  takes the row width, so a row's cells drag at one rate. Exactly the
+  indicator's travel was tried first and felt slow; the headings' 200px was
+  far too fast. The headings keep 200px.
+- **Hovering or dragging the `↔` grip puts the hover box on both frequency
+  readouts**, since it moves both. The two boxes are inset 10px on the side
+  facing the grip, rather than 4px, so they stand clear of its arrowheads.
+
+The bypass default exposed a test that had quietly stopped testing: the
+round trips on set 1 skip any value that prints `-`, and a bypassed set prints
+`-` for everything, so they were passing by checking nothing. The test now
+switches set 1 on explicitly, and checks the bypass defaults themselves.
+
+**Open for QA** -- none of this can be seen in a still: the dimming coming up
+only over the range controls, the hover box, handle hover and drag feel, the
+grab offset, the new drag rate, option-click and double-click on a handle.
 
 ### 6.7 — Spectrograms
 

@@ -88,7 +88,7 @@ void DraggableValue::mouseDrag(const juce::MouseEvent& e)
   // it. Up and right both increase.
   const auto delta = (float)(e.getDistanceFromDragStartX() - e.getDistanceFromDragStartY());
   param.setValueNotifyingHost(
-      juce::jlimit(0.0f, 1.0f, valueAtDragStart + dragSign() * delta / dragRange));
+      juce::jlimit(0.0f, 1.0f, valueAtDragStart + dragSign() * delta / dragPixels()));
   valueChanged();
   repaint();
 }
@@ -157,7 +157,7 @@ void DraggableValue::showEditor()
   // disagree about what a string means -- Phase 5 wired every inverse.
   editor = std::make_unique<juce::TextEditor>();
   addAndMakeVisible(*editor);
-  editor->setBounds(getLocalBounds().removeFromBottom(juce::jmin(18, getHeight())));
+  editor->setBounds(editorBounds());
   editor->setText(displayText(), juce::dontSendNotification);
   editor->selectAll();
   editor->grabKeyboardFocus();
