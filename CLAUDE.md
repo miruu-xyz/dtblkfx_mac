@@ -123,8 +123,16 @@ Things in this codebase that have already cost time, or are waiting to:
   parameter alone. Everything that sends `FX_TYPE` to the engine must go
   through `DtBlkFxAudioProcessor::pushFxType(set)`; calling
   `core->setParameter` for an `FX_TYPE` index directly re-enables a bypassed
-  row silently. The `Off` value is looked up by name, not hard-coded, because
-  the effect table's two adjacent no-op slots may be filled in later.
+  row silently. `pushFxType` runs on whichever thread changed either
+  parameter, so its read-then-write is under `fxTypeLock` -- a mutex, because
+  the write calls `core->setParameter`, which waits on the engine's `_protect`
+  for as long as the audio thread is inside a block. The `Off` value is looked up by name, not hard-coded, because
+  the effect table's two adjacent no-op slots may be filled in later. And
+  because a bypassed set's engine runs `Off`, which prints `-` for everything,
+  `coreParamText` formats a set's params for its *parked* effect through a
+  port-added `FxState1_0::getParamDisplay` overload that takes the effect
+  explicitly -- so the GUI and the host's automation lanes read real values
+  for a bypassed row. The engine still does the formatting.
 
 - **`setInitialDelay()` is a no-op**, so plugin latency is never reported to the
   host.

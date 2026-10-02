@@ -20,6 +20,7 @@
 #pragma once
 
 #include "DtBlkFx.hpp"
+#include <array>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 
@@ -102,6 +103,13 @@ public:
   // bypassed. Every writer of that engine value goes through here.
   void pushFxType(int set);
 
+  /** Whether a row is running (not bypassed), and the FX_TYPE parameter value
+      parked in it. Read from pointers cached at construction: these are asked
+      on the audio thread, on every paint and on every refresh, and looking a
+      parameter up by id allocates the id string each time. */
+  bool isSetOn(int set) const { return fxOnRaw[(size_t)set]->load() >= 0.5f; }
+  float fxTypeValue(int set) const { return fxTypeRaw[(size_t)set]->load(); }
+
   // BlkLen and Overlap get their own: the engine's display code ignores the
   // value it is given for BlkLen, and Overlap is no longer one packed value.
   // See the definitions.
@@ -153,6 +161,21 @@ private:
     DtBlkFxAudioProcessor& owner;
   };
   DisplayRefresher displayRefresher{*this};
+
+  std::array<std::atomic<float>*, BlkFxParam::NUM_FX_SETS> fxOnRaw{}, fxTypeRaw{};
+
+  // pushFxType reads the bypass flag and writes the engine's FX_TYPE, and it is
+  // called from whichever thread changed either parameter -- automation on the
+  // audio thread, a click on the message thread. Unguarded, a click's "Off"
+  // could land before an automation write of the effect, leaving a bypassed
+  // row running. The read and the write have to be one step, so the write is
+  // inside the lock -- and core->setParameter takes the engine's own _protect,
+  // which the audio thread holds for a whole block. So this can be held for a
+  // block's length, and it is a mutex, not a spin lock that would burn a core
+  // waiting. The audio thread already waits on _protect for every engine
+  // parameter write; this adds no new kind of stall, and there is no deadlock:
+  // the audio thread never reaches pushFxType while holding _protect.
+  juce::CriticalSection fxTypeLock;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DtBlkFxAudioProcessor)
 };

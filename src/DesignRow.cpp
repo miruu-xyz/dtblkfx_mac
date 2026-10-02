@@ -74,9 +74,7 @@ void drawArrows(Graphics& g, Rectangle<int> box, bool vertical, Colour c)
     to keep offering what is parked in the row. */
 FxRun1_0* parkedEffect(DtBlkFxAudioProcessor& p, int set)
 {
-  const auto id =
-      DtBlkFxAudioProcessor::paramId(BlkFxParam::paramOffs(set) + BlkFxParam::FX_TYPE);
-  return GetFxRun1_0((int)BlkFxParam::getEffectType(p.apvts.getRawParameterValue(id)->load()));
+  return GetFxRun1_0((int)BlkFxParam::getEffectType(p.fxTypeValue(set)));
 }
 
 } // namespace
@@ -284,9 +282,12 @@ void FreqLink::mouseDrag(const MouseEvent& e)
 
   // The same delta into both, in parameter space. The frequency parameter is a
   // note offset, so an equal step moves both by the same interval and the range
-  // keeps its width in musical terms rather than in Hz.
-  // Scaled like the frequency readouts, so the grip and the readouts it moves
-  // drag at the same rate.
+  // keeps its width in musical terms rather than in Hz -- until an end reaches
+  // the edge of the axis, where it stops and the range squeezes. Every position
+  // is computed from where the drag started, not from the previous one, so
+  // dragging back out in the same motion restores the width exactly; after
+  // mouse-up the squeezed range is simply the new range. Scaled like the
+  // frequency readouts, so the grip and the readouts it moves drag at one rate.
   auto* row = findParentComponentOfClass<FxRow>();
   const float pixels = row != nullptr ? rowDragPixels(row->freqAxisLength()) : DraggableValue::dragRange;
   const float delta = (float)e.getDistanceFromDragStartX() / pixels;
@@ -295,7 +296,7 @@ void FreqLink::mouseDrag(const MouseEvent& e)
     if (freq[i] != nullptr)
       freq[i]->setValueNotifyingHost(jlimit(0.0f, 1.0f, valueAtDragStart[i] + delta));
 
-  if (auto* row = findParentComponentOfClass<FxRow>())
+  if (row != nullptr)
     row->refresh();
 }
 
@@ -424,7 +425,7 @@ void FxTypeCell::refresh()
 
 bool FxTypeCell::isOn() const
 {
-  return processor.apvts.getRawParameterValue(DtBlkFxAudioProcessor::fxOnId(set))->load() >= 0.5f;
+  return processor.isSetOn(set);
 }
 
 void FxTypeCell::paint(Graphics& g)
@@ -540,7 +541,7 @@ FxRow::~FxRow()
 
 bool FxRow::isOn() const
 {
-  return processor.apvts.getRawParameterValue(DtBlkFxAudioProcessor::fxOnId(set))->load() >= 0.5f;
+  return processor.isSetOn(set);
 }
 
 void FxRow::setFreqsLinked(bool on)

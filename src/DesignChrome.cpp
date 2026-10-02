@@ -728,17 +728,10 @@ void TitleBar::mouseUp(const juce::MouseEvent& e)
   if (!clicked)
     return;
 
-  // The manual travels with the source. Fall back to the project page if this
-  // is an installed build with no repository beside it.
-  const auto manual = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
-                          .getParentDirectory()
-                          .getChildFile("docs/MANUAL.md");
-
-  if (manual.existsAsFile())
-    manual.startAsProcess();
-  else
-    juce::URL("https://github.com/miruu-xyz/dtblkfx_mac/blob/main/docs/MANUAL.md")
-        .launchInDefaultBrowser();
+  // The manual lives in the repository, not in the plug-in bundle, so the
+  // project page is the one place it can always be found.
+  juce::URL("https://github.com/miruu-xyz/dtblkfx_mac/blob/main/docs/MANUAL.md")
+      .launchInDefaultBrowser();
 }
 
 //==============================================================================

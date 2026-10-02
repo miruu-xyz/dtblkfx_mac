@@ -120,6 +120,14 @@ void FxState1_0::prepare()
 bool /*true=printed*/ FxState1_0::getParamDisplay(BlkFxParam::SplitParamNum& p, float v,
                                                   Rng<char> str)
 {
+  // get the effect runtime interface
+  return getParamDisplay(p, v, str, getFxRun());
+}
+
+//-------------------------------------------------------------------------------------------------
+bool /*true=printed*/ FxState1_0::getParamDisplay(BlkFxParam::SplitParamNum& p, float v,
+                                                  Rng<char> str, FxRun1_0* fx_run)
+{
   using namespace BlkFxParam;
 
   // check whether our param is attached to the vst param
@@ -128,9 +136,6 @@ bool /*true=printed*/ FxState1_0::getParamDisplay(BlkFxParam::SplitParamNum& p, 
 
   // get value after morph
   v = _param[p.fx_param](v);
-
-  // get the effect runtime interface
-  FxRun1_0* fx_run = getFxRun();
 
   // is the param used?
   if (!fx_run->paramUsed(p.fx_param)) {

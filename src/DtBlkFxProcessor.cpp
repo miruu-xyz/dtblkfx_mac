@@ -68,6 +68,9 @@ DtBlkFxAudioProcessor::DtBlkFxAudioProcessor()
   // After the bulk push above, which wrote the unmasked type: re-send each
   // set's FX_TYPE so a bypassed row starts silent.
   for (int set = 0; set < BlkFxParam::NUM_FX_SETS; ++set) {
+    fxOnRaw[(size_t)set] = apvts.getRawParameterValue(fxOnId(set));
+    fxTypeRaw[(size_t)set] =
+        apvts.getRawParameterValue(paramId(BlkFxParam::paramOffs(set) + BlkFxParam::FX_TYPE));
     apvts.addParameterListener(fxOnId(set), this);
     pushFxType(set);
   }
@@ -186,15 +189,14 @@ void DtBlkFxAudioProcessor::pushFxType(int set)
   if (core == nullptr)
     return;
 
-  const int index = BlkFxParam::paramOffs(set) + BlkFxParam::FX_TYPE;
-  const bool on = apvts.getRawParameterValue(fxOnId(set))->load() >= 0.5f;
-
-  core->setParameter(index,
-                     on ? apvts.getRawParameterValue(paramId(index))->load() : offEffectParam());
+  {
+    const juce::ScopedLock lock(fxTypeLock);
+    core->setParameter(BlkFxParam::paramOffs(set) + BlkFxParam::FX_TYPE,
+                       isSetOn(set) ? fxTypeValue(set) : offEffectParam());
+  }
 
   // FX_TYPE decides what the other four params in the set mean, including
-  // whether they print "-" at all -- and a bypassed row prints "-" throughout,
-  // which is what makes the greyed row in the design read correctly.
+  // whether they print "-" at all.
   displayRefresher.triggerAsyncUpdate();
 }
 
@@ -226,8 +228,16 @@ juce::String DtBlkFxAudioProcessor::coreParamText(int index, float v)
   // asking for text never disturbs the audio. DtBlkFx::getParameterDisplay,
   // which the VST2 build used, does the opposite -- it ignores the value and
   // reads _params.getInput(index) -- so it is deliberately not used here.
-  if (core->getParamDisplayGlobal(p, v, buf) ||
-      (p.fx_set >= 0 && core->_fx1_0[p.fx_set].getParamDisplay(p, v, buf)))
+  // A set's params are formatted for the effect parked in it -- its FX_TYPE
+  // parameter -- not the one the engine is running, which is "Off" while the
+  // set is bypassed. Otherwise a bypassed row, and its automation lanes in the
+  // host, read "-" for everything. The engine still does the formatting.
+  if (core->getParamDisplayGlobal(p, v, buf))
+    return juce::String(buf.data);
+
+  if (p.fx_set >= 0 &&
+      core->_fx1_0[p.fx_set].getParamDisplay(
+          p, v, buf, GetFxRun1_0((int)BlkFxParam::getEffectType(fxTypeValue(p.fx_set)))))
     return juce::String(buf.data);
 
   // Param is in morph mode and not attached here; the engine falls back to a
@@ -514,8 +524,10 @@ void DtBlkFxAudioProcessor::parameterChanged(const juce::String& parameterID, fl
   if (core == nullptr)
     return;
 
+  // getTrailingIntValue rather than substring(): this runs on the audio thread
+  // for every automated parameter, and substring allocates.
   if (parameterID.startsWith("param_")) {
-    const int index = parameterID.substring(6).getIntValue();
+    const int index = parameterID.getTrailingIntValue();
 
     // FX_TYPE decides what the other four params in its set mean, including
     // whether they print "-" at all -- and while the set is bypassed the
@@ -536,7 +548,7 @@ void DtBlkFxAudioProcessor::parameterChanged(const juce::String& parameterID, fl
   }
 
   if (parameterID.startsWith("fxOn_")) {
-    pushFxType(parameterID.substring(5).getIntValue());
+    pushFxType(parameterID.getTrailingIntValue());
     return;
   }
 
@@ -808,12 +820,15 @@ void DtBlkFxAudioProcessor::pushSpectrogramBlock(std::vector<float>& held,
   // that fell between two polls. The original kept the max across blocks too
   // (Spectrogram::getMaxVals). A new FFT length starts over: its bins are not
   // the old ones.
-  if (!available || (int)held.size() != numBins) {
-    held.assign(data, data + numBins);
-  }
-  else {
-    for (int i = 0; i < numBins; ++i)
-      held[(size_t)i] = std::max(held[(size_t)i], data[i]);
+  // `x > 0 ? x : 0` turns a NaN or negative power into silence; std::max
+  // would keep a NaN that arrived first, poisoning that bin until consumed.
+  const bool fresh = !available || (int)held.size() != numBins;
+  if (fresh)
+    held.resize((size_t)numBins);
+
+  for (int i = 0; i < numBins; ++i) {
+    const float v = data[i] > 0.0f ? data[i] : 0.0f;
+    held[(size_t)i] = fresh ? v : std::max(held[(size_t)i], v);
   }
   available = true;
 }

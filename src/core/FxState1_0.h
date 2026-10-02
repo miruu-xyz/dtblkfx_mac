@@ -58,6 +58,13 @@ public:
 
   bool /*true=printed*/ getParamDisplay(BlkFxParam::SplitParamNum& p, float v, Rng<char> str);
 
+  // (port, Phase 6 review) The same, formatted for the effect `fx_run` rather than
+  // the one this set is currently running. A bypassed set runs "Off", which
+  // uses no params and prints "-" for all of them; the host and the GUI want
+  // what the set would read with its own effect parked in it. Display only.
+  bool /*true=printed*/ getParamDisplay(BlkFxParam::SplitParamNum& p, float v, Rng<char> str,
+                                        FxRun1_0* fx_run);
+
   // called prior to process
   void prepare();
 

@@ -395,32 +395,35 @@ int main(int argc, char** argv)
 
   // --- Phase 6.3a: per-row bypass -------------------------------------------
   // The engine has no bypass of its own, so fxOn_<n> masks FX_TYPE on the way
-  // to it. Two things have to hold: bypassing a row is indistinguishable from
-  // running "Off" in it, and the row's own FX_TYPE parameter is left alone, so
-  // whatever is parked in the row comes back untouched.
+  // to it. What has to hold: a bypassed row's engine runs "Off"; the row's own
+  // FX_TYPE parameter is left alone, so the parked effect comes back
+  // untouched; and -- since the Phase 6 review -- every text the host or the
+  // GUI reads for that row, its effect included, is the parked effect's, not
+  // "Off"'s dashes.
   {
     auto* type = get(p, set0(FX_TYPE));
     auto* amp = get(p, set0(FX_AMP));
     auto* on = get(p, DtBlkFxAudioProcessor::fxOnId(0));
 
     if (type != nullptr && amp != nullptr && on != nullptr) {
-      const auto running = amp->getText(0.5f, 0);
+      auto engineEffect = [&] { return juce::String(p.core->_fx1_0[0].getFxRun()->name()); };
 
-      type->setValueNotifyingHost(type->getValueForText("Off"));
-      const auto offText = amp->getText(0.5f, 0);
-      check(offText != running, "\"Off\" prints the same amp text as Contrast");
-
-      type->setValueNotifyingHost(getEffectTypeInv(1));
+      type->setValueNotifyingHost(getEffectTypeInv(1)); // Contrast
       const float parked = type->getValue();
+      const auto running = amp->getText(0.5f, 0);
+      check(engineEffect() == "Contrast", "row 1 is running " + engineEffect() + ", not Contrast");
 
       on->setValueNotifyingHost(0.0f);
-      check(amp->getText(0.5f, 0) == offText,
-            "bypassed row reads \"" + amp->getText(0.5f, 0) + "\", not \"" + offText + "\"");
+      check(engineEffect() == "Off", "a bypassed row's engine runs " + engineEffect() + ", not Off");
       check(type->getValue() == parked, "bypass moved the row's FX_TYPE parameter");
+      check(amp->getText(0.5f, 0) == running,
+            "bypassed amp reads \"" + amp->getText(0.5f, 0) + "\", not its effect's \"" + running + "\"");
+      check(type->getText(type->getValue(), 0) == "Contrast",
+            "a bypassed row's effect lane reads \"" + type->getText(type->getValue(), 0) + "\"");
 
       on->setValueNotifyingHost(1.0f);
-      check(amp->getText(0.5f, 0) == running,
-            "un-bypassing read \"" + amp->getText(0.5f, 0) + "\", not \"" + running + "\"");
+      check(engineEffect() == "Contrast", "un-bypassing left the engine on " + engineEffect());
+      check(amp->getText(0.5f, 0) == running, "un-bypassing changed the amp text");
     }
 
     checkTextRoundTrip(p, DtBlkFxAudioProcessor::fxOnId(0));

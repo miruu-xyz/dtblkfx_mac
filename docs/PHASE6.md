@@ -134,10 +134,10 @@ closed.
   presets and automation can hold, and the engine answers `Off` for those table
   slots whatever the menu shows. Dropping it buys nothing until slots 9 and 10
   are actually filled, and then it is one line in 6.4.
-- The `Off` effect has `_params_used` all zero, so **a bypassed row prints `-`
-  for all four values** — which is exactly the greyed Variant3 the design draws.
-  `tests/param_text_test.cpp` asserts that a bypassed row is indistinguishable
-  from one running `Off`, and that `FX_TYPE` survives the round trip.
+- The `Off` effect has `_params_used` all zero, so **a bypassed row printed `-`
+  for all four values** -- in the GUI and in the host's automation lanes.
+  Changed at the Phase 6 review checkpoint (below): a bypassed row now reads its
+  parked effect's values.
 
 ### 6.3b — The FX row, static ✅
 
@@ -590,6 +590,60 @@ was in use.
 readout, pause, and the inversion following a drag. And whether the original's
 rainbow sits well in the window; it was the one choice made knowing it would
 not match the palette.
+
+### Phase 6 review checkpoint (2026-10-02)
+
+A separate agent ran `/code-review` on the branch against `main`. Ten findings;
+what became of each:
+
+- **Fixed -- bypass could race the effect type (2), allocated on the audio
+  thread (7), and was checked three different ways (8).** `pushFxType` reads
+  the bypass flag and writes the engine's `FX_TYPE`, and runs on whichever
+  thread changed either one; a click's `Off` could land before an automation
+  write of the effect and leave a bypassed row running. It is now under a
+  lock -- a mutex rather than the spin lock first tried, because the write
+  inside it waits on the engine's `_protect` for up to a block, which the
+  re-review caught -- and the 16 bypass and type parameters are looked up once at
+  construction instead of by id string on every call. `isSetOn(set)` and
+  `fxTypeValue(set)` on the processor are the one way the GUI asks. While
+  there, `parameterChanged` parses ids with `getTrailingIntValue` instead of
+  `substring`, which had allocated on the audio thread for every automated
+  parameter since Phase 5.
+- **Fixed -- a bypassed row read `-` everywhere (4).** That included the host's
+  automation lanes and the inline editor's prefill, so a lane could not be set
+  up blind before switching it on, which 6.6 says it can. A port-added
+  `FxState1_0::getParamDisplay` overload formats for an explicit effect, and
+  `coreParamText` passes the parked one. The engine still formats; nothing is
+  hand-rolled. The picker still reads `---`; the host's effect lane reads the
+  parked effect's name. The test now checks the engine runs `Off` directly
+  instead of inferring it from the dashes, and fails if either the mask or the
+  parked-effect formatting is removed.
+- **Fixed -- stale spectrogram peak (5).** With no editor open nothing took
+  the max-held block, so the first line after opening was the loudest moment
+  since the window was last closed. The editor drops it on opening. NaN or
+  negative power now counts as silence rather than poisoning a bin.
+- **Not a bug -- the grip squeezing the range (6).** Every drag position is
+  computed from where the drag started, so dragging into an edge squeezes the
+  range and dragging back out in the same motion restores it; after mouse-up
+  the squeezed range is the new range. That is the wanted behaviour; the
+  comment claiming the width always holds was what was wrong.
+- **Fixed -- the help button's local manual could never be found (10).** Inside
+  the bundle there is no `docs/` beside the binary. It opens the project page.
+- **Skipped -- old states load with most rows bypassed (1).** A state from
+  `main` has no `fxOn_*`, and JUCE leaves a missing parameter at its current
+  value, so a fresh instance opens one with only row 2 on. Nobody has a
+  project on `main` yet. **If that changes, treat a missing `fxOn_*` as on in
+  `setStateInformation`.**
+- **Already accepted -- one beat of uncompensated delay on a fresh instance
+  (3).** The 6.6a default.
+- **Out of scope, noted by the re-review -- `triggerAsyncUpdate` on the audio
+  thread.** `parameterChanged` has called it since Phase 5; JUCE warns it posts
+  to the system message queue and may block. (The re-review's other point --
+  that the MixBack/Overlap path allocates in `getRawParameterValue` -- does not
+  hold: with a string literal that is a `std::map<StringRef>` lookup.)
+- **Left -- `axis::hzToParam` "dead and duplicated" (9).** The test uses it, and
+  having the processor call it would make it depend on a GUI header for one
+  line.
 
 ### 6.8 — Persistent locks
 

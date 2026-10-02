@@ -384,6 +384,18 @@ DtBlkFxEditor::DtBlkFxEditor(DtBlkFxAudioProcessor& p)
 
   setSize(windowWidth, windowHeight);
   shownMaskOutlines = maskOutlines();
+
+  // Drop whatever the processor max-held while no editor was open to take it:
+  // otherwise the first line drawn would be the loudest moment since the window
+  // was last closed, shown as if it had just happened.
+  for (auto [lock, flag] : {std::pair{&audioProcessor.inputSpectrogramLock,
+                                      &audioProcessor.newInputSpectrogramDataAvailable},
+                            std::pair{&audioProcessor.outputSpectrogramLock,
+                                      &audioProcessor.newOutputSpectrogramDataAvailable}}) {
+    const juce::ScopedLock sl(*lock);
+    *flag = false;
+  }
+
   startTimerHz(60);
 }
 
