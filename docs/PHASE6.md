@@ -505,13 +505,91 @@ switches set 1 on explicitly, and checks the bypass defaults themselves.
 only over the range controls, the hover box, handle hover and drag feel, the
 grab offset, the new drag rate, option-click and double-click on a handle.
 
-### 6.7 — Spectrograms
+### 6.7 — Spectrograms ✅
 
 Repaint both against 6.5's mapping so their columns line up with the row
-handles below. Then, optionally, restore the original's behaviour where the
-spectrogram is a control surface and dragging on it sets a row's frequency
-range — that is in `dtblkfx_src/Spectrogram.cpp`, not in the Figma, so it needs
-a scope decision.
+handles below, and bring back what the original's spectrogram did.
+
+**The original was never a control surface**, which is what this file used to
+say. `dtblkfx_src/Spectrogram.cpp` draws a hairline and a frequency readout
+under the pointer, mirrored on the other spectrogram, and pauses on a click.
+The link to the rows ran the other way: `FxCtrl::doHiliteSgrams` inverted a
+row's frequency range on both spectrograms while that row's frequency control
+was in use.
+
+**Settled before starting (grilled 2026-10-02):**
+
+- **Left channel only, labelled `Input` and `Output`.** The engine's feed --
+  port code, not original DSP -- has only ever extracted channel 0, so the
+  design's `L+R` would have been wrong.
+- **The original's colours**: black, blue, cyan, green, yellow, red, linear
+  between stops, over log power -80 to -14 dB -- `Gui.cpp`'s gradient and
+  `Spectrogram.cpp`'s `_pwr_min`/`_pwr_max`.
+- **Scroll speed**: 1.5 s top to bottom at any sample rate, scrolling smoothly
+  (see the follow-ups -- this started as the original's 2.4 s at 44.1 kHz).
+- **Hover and click as the original**: a `#999DA6` hairline mirrored on both,
+  the frequency in Hz and note in place of the label, and a click to pause --
+  both of them, not just the one clicked (`PAUSED` in the label).
+- **A row's range inverts on both spectrograms** while the mouse is down on
+  one of its range controls -- a frequency readout, the grip or a handle --
+  including the flip when the handles are crossed. Hovering only dims the row.
+  No edge lines; the inversion is signal enough.
+- **Nothing above 25.8 kHz.** At 88.2/96 kHz the last column used to fold
+  everything up to Nyquist into one pixel; it now stops where the axis does.
+- **Octave ticks** at every C along the bottom edge, 7px in `#999DA6`.
+- **Labels and readout in white with a black outline**, as the original's
+  `OutlineDrawString` drew them, so they read over whatever is beneath.
+
+**What 6.7 landed:**
+
+- `SpectrogramComponent` rewritten: frequency across on `DesignAxis`'s inset
+  axis, newest line at the bottom. A second, pre-inverted image is written with
+  every line, so the highlight is a clipped draw rather than per-pixel work on
+  every paint.
+- **The processor max-holds blocks** between the editor's polls instead of
+  keeping only the last. At the default settings the engine produces about 70
+  blocks a second against a 60 Hz poll, and the old code dropped the rest -- and
+  with them any transient that fell between two polls.
+- **The output feed now includes the power-match scale**, as the original
+  drew it (`Gui.cpp`: `newData(..., out_pwr_scale)`). The port's callback had
+  left it out, so with POWR on the output spectrogram showed pre-match levels.
+  One line, in port-added code in `src/core/DtBlkFx.cpp`; display only, and
+  `check_audio.sh` confirms nothing audible moved.
+- `DesignAxis::binEdges` stops at the 25.8 kHz bin.
+- `dtblkfx_paramtext` checks the colour map's ends and middle;
+  `--sgram-shot <png>` renders one spectrogram fed a synthetic signal with the
+  highlight and hover on, since a live one is black without audio.
+
+**6.7 follow-ups.** A first review pass:
+
+- **1.5 s of history**, down from 2.4 s. (1 s was tried and was far too
+  quick.)
+- **Smooth scrolling.** It was driven by data: a frame with no new block did
+  not move and the next one jumped, so the motion followed block timing.
+  Scrolling now runs on the display's own refresh (`juce::VBlankAttachment`)
+  at a constant rate, sub-pixel: the image is one row taller than the
+  component and drawn offset by the fraction of a row elapsed, so the newest
+  row rises into view rather than arriving at once. Data fills each row as it
+  is committed -- the max held since the last row, or a repeat of the last row
+  when no block has arrived since, so a block spans the time it covers. At
+  1.5 s that is about 118 rows a second against about 70 blocks, so most
+  blocks cover one or two rows. It holds still when paused and when no block has
+  arrived for 250 ms, so a host that stops processing does not scroll the
+  display into nothing.
+- **Clicking either spectrogram pauses both**, and a paused spectrogram fades
+  a quarter of the way toward the window grey, ground included, so it is
+  obvious at a glance. The `PAUSED` caption is drawn after the fade and stays
+  crisp. `SGRAM_PAUSED=1 dtblkfx_paramtext --sgram-shot <png>` renders it.
+- **The inversion needs the mouse down**, not just hovering. Evaluated live in
+  the editor's poll from the mouse source, since during a press JUCE keeps the
+  pressed component as the one under the mouse.
+- **Ticks 7px**, up from 4.
+- **Outlined text**, as above.
+
+**Open for QA:** everything that moves -- the smooth scroll, the hairline and
+readout, pause, and the inversion following a drag. And whether the original's
+rainbow sits well in the window; it was the one choice made knowing it would
+not match the palette.
 
 ### 6.8 — Persistent locks
 
@@ -528,7 +606,8 @@ on the row rewrite.
 ```
 
 Renders the real editor offscreen to a PNG. `--demo-shot <file.png>` does the
-same with the rows set up to show every state at once (6.6b). `--menu-shot <file.png>` does the
+same with the rows set up to show every state at once (6.6b), and
+`--sgram-shot <file.png>` renders one spectrogram fed a synthetic signal (6.7). `--menu-shot <file.png>` does the
 same for the FX-type menu, which `--shot` cannot see because a `PopupMenu` is a
 separate desktop window; it flashes on screen for a moment. The Standalone build must not be
 launched unattended -- JUCE's wrapper opens the default audio input *and*
@@ -537,12 +616,11 @@ substitute. With no arguments the same binary still runs the parameter checks.
 
 ## Open questions
 
-- **Resizing.** The window is fixed at 652 x 912 through 6.7. The Figma is
+- **Resizing.** The window is fixed at 652 x 912 through 6.7, and 6.7 is
+  done. The Figma is
   auto-layout, so the intent is to make it resizable afterwards -- keep layout
   code structural rather than pixel-placed so that is a tuning job, not a
   rewrite.
-- **Spectrogram-as-control-surface** (6.7) is not in the Figma and needs a
-  scope decision.
 
 ## What 6.2 landed
 

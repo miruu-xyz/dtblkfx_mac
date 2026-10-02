@@ -19,6 +19,7 @@
 #include "DtBlkFxEditor.h"
 #include "DtBlkFxProcessor.h"
 #include "RetroLookAndFeel.h"
+#include "SpectrogramComponent.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -169,6 +170,36 @@ int main(int argc, char** argv)
     }
 
     return writePng(editor->createComponentSnapshot(editor->getLocalBounds(), true), argv[2]);
+  }
+
+  // `--sgram-shot <file.png>` renders one spectrogram fed a synthetic signal --
+  // pink-ish noise, a rising tone, a broadband click every 40 lines -- with a
+  // range inverted and the hover on, since a live one is black without audio.
+  if (argc == 3 && juce::String(argv[1]) == "--sgram-shot") {
+    juce::ScopedJuceInitialiser_GUI gui;
+    SpectrogramComponent sgram("Output");
+    sgram.setSize(640, 177);
+
+    constexpr int fftLen = 2048, bins = fftLen / 2 + 1;
+    std::vector<float> block(bins);
+    for (int line = 0; line < 177; ++line) {
+      const int tone = juce::roundToInt(std::pow(2.0, 3.0 + 6.5 * line / 176.0)); // ~8..720
+      for (int b = 0; b < bins; ++b) {
+        block[(size_t)b] = 2e-9f / (1.0f + 0.01f * (float)b); // below -80 dB: black
+        if (std::abs(b - tone) <= 1)
+          block[(size_t)b] = 0.02f;
+        if (line % 40 == 20)
+          block[(size_t)b] = std::max(block[(size_t)b], 1e-3f);
+      }
+      sgram.pushBlock(block.data(), bins, 44100.0);
+      sgram.writeLine();
+    }
+
+    sgram.setHighlight(true, 0.35f, 0.6f);
+    sgram.setHover(0.5f, true);
+    if (std::getenv("SGRAM_PAUSED") != nullptr) // review aid: the paused look
+      sgram.setPaused(true);
+    return writePng(sgram.createComponentSnapshot(sgram.getLocalBounds(), true), argv[2]);
   }
 
   // `--menu-shot <file.png>` renders the FX-type menu. A PopupMenu is its own
@@ -485,8 +516,11 @@ int main(int argc, char** argv)
       const int end = fftLen / 2 + 1;
       const auto what = juce::String(fftLen) + " @ " + juce::String((int)rate);
 
-      check((int)edges.size() == columns + 1 && edges.front() == 0 && edges.back() == end,
-            what + ": edges do not run 0.." + juce::String(end));
+      // The last edge is one past Nyquist, or the 25.8 kHz bin if that comes
+      // first: nothing above the axis is folded into its last column.
+      const int top = std::min(end, juce::roundToInt(ax::paramToHz(1.0f) * fftLen / rate));
+      check((int)edges.size() == columns + 1 && edges.front() == 0 && edges.back() == top,
+            what + ": edges do not run 0.." + juce::String(top));
       check(std::is_sorted(edges.begin(), edges.end()), what + ": edges go backwards");
 
       // Empty columns are exactly the ones past Nyquist, and form one run at
@@ -511,16 +545,35 @@ int main(int argc, char** argv)
             what + ": " + juce::String(empty) + " empty columns, expected about " +
                 juce::String(expectedEmpty));
 
-      // The Nyquist bin is shown somewhere, whatever the rate.
+      // The Nyquist bin is shown somewhere when it is on the axis, and not at
+      // all when it is past it.
       bool nyquistShown = false;
       for (int c = 0; c < columns && !nyquistShown; ++c)
         nyquistShown = ax::columnBins(edges, c).contains(end - 1);
-      check(nyquistShown, what + ": the Nyquist bin is in no column");
+      check(nyquistShown == (top == end),
+            what + (nyquistShown ? ": the Nyquist bin is shown past the axis"
+                                 : ": the Nyquist bin is in no column"));
 
       std::printf("  fft %5d @ %6.0f Hz  -> %d columns, %d empty above Nyquist, %d showing only bins 0-1\n",
                   fftLen, rate, columns, empty,
                   (int)std::count_if(edges.begin(), edges.end() - 1, [&](int e) { return e <= 1; }));
     }
+  }
+
+  // --- Phase 6.7: the original's spectrogram colours -----------------------
+  // Black at or below -80 dB (and for NaN), red at or above -14 dB, and the
+  // original's stops in between -- halfway is between cyan and green.
+  {
+    using design::spectrogramColour;
+    check(spectrogramColour(0.0f) == juce::Colours::black, "silence is not black");
+    check(spectrogramColour(std::nanf("")) == juce::Colours::black, "NaN is not black");
+    check(spectrogramColour(1e-8f) == juce::Colours::black, "-80 dB is not black");
+    check(spectrogramColour(0.04f) == juce::Colour(255, 0, 0), "-14 dB is not red");
+    check(spectrogramColour(1.0f) == juce::Colour(255, 0, 0), "0 dB is not red");
+
+    const auto mid = spectrogramColour(std::sqrt(1e-8f * 0.04f)); // halfway in log
+    check(mid.getRed() == 0 && mid.getGreen() > 200 && mid.getBlue() > 100 && mid.getBlue() < 160,
+          "halfway reads " + mid.toDisplayString(false) + ", not between cyan and green");
   }
 
   // Phase 6.1: the embedded fonts. createSystemTypefaceFor returns null on a

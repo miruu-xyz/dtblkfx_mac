@@ -88,7 +88,8 @@ inline float ampUnityParam()
 
 /** FFT bin edges for `columns` spectrogram columns laid across a frequency
     span: column c shows the power in bins `[edges[c], edges[c + 1])`. Returns
-    `columns + 1` edges, non-decreasing, from 0 to `fftLen / 2 + 1`.
+    `columns + 1` edges, non-decreasing, from 0 up to whichever comes first of
+    one past Nyquist (`fftLen / 2 + 1`) and the axis's own top, 25.8 kHz.
 
     Column c covers parameters `[c, c + 1) / columns`, which is what
     `paramToX` puts under screen column c. The original put each pixel's
@@ -96,9 +97,11 @@ inline float ampUnityParam()
     `half_pix` factor -- because it labelled pixels by their left edge; defined
     by edges, the same thing falls out directly.
 
-    One deliberate difference: columns wholly above Nyquist come back empty,
-    `[fftLen / 2 + 1, fftLen / 2 + 1)`. The original clamped them to the Nyquist
-    bin and so repeated it across the top of the display. */
+    Two deliberate differences from the original. Columns wholly above Nyquist
+    come back empty; the original clamped them to the Nyquist bin and so
+    repeated it across the top of the display. And at 88.2/96 kHz, where
+    Nyquist is past the axis, the last column stops at 25.8 kHz rather than
+    folding everything up to Nyquist into one pixel. */
 inline std::vector<int> binEdges(int columns, int fftLen, double sampleRate)
 {
   std::vector<int> edges((size_t)juce::jmax(columns, 0) + 1, 0);
@@ -113,14 +116,16 @@ inline std::vector<int> binEdges(int columns, int fftLen, double sampleRate)
     edges[(size_t)c] = juce::jlimit(edges[(size_t)c - 1], end, juce::roundToInt(bin));
   }
 
-  edges[(size_t)columns] = end;
+  const int top = juce::roundToInt(BlkFxParam::getHz(1.0f) * binsPerHz);
+  edges[(size_t)columns] = juce::jlimit(edges[(size_t)columns - 1], end, top);
   return edges;
 }
 
 /** The bins column c actually shows. Never empty below Nyquist: at the low end
     several columns fall inside one bin, and each of them shows that bin -- as
     the original's `getMaxVals` does with its "always do at least one bin". Empty
-    above Nyquist, which draws as silence. */
+    above Nyquist, which draws as silence. `edges.back()` is the end of the
+    displayable range, not necessarily of the FFT. */
 inline juce::Range<int> columnBins(const std::vector<int>& edges, int column)
 {
   const int start = edges[(size_t)column];

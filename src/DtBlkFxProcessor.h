@@ -113,6 +113,10 @@ public:
   // FIFO for spectrogram data
   // Using a simple lock-free FIFO for now. In a real app, use AbstractFifo.
   // We'll just expose a method to push data.
+  static void pushSpectrogramBlock(std::vector<float>& held,
+                                   std::atomic<bool>& available,
+                                   const float* data,
+                                   int numBins);
   void pushInputSpectrogramData(const float* data, int numBins);
   void pushOutputSpectrogramData(const float* data, int numBins);
 

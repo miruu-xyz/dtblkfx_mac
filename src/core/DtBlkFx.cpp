@@ -1659,8 +1659,13 @@ inline void DtBlkFx::_process(float** in_buf, long buf_n)
 
         float* spec_out = _spectrogram_buffer.data();
         CplxfPtrPair spec_in(FFTdata(i), _freq_fft_n / 2 + 1);
+        // (port, Phase 6.7) Times the power-match scale procFFT just computed,
+        // as the original's GUI did (Gui.cpp: newData(..., out_pwr_scale)).
+        // Without it the output spectrogram showed pre-match levels whenever
+        // POWR was on. Display only; the audio path does not read this buffer.
+        const float pwr_scale = _chan[i].out_pwr_scale;
         for (; !spec_in.equal(); spec_in.a++, spec_out++) {
-          *spec_out = norm(*spec_in.a); // Pass magnitude squared (energy) to UI
+          *spec_out = norm(*spec_in.a) * pwr_scale; // magnitude squared (energy)
         }
         outputSpectrogramCallback(_spectrogram_buffer.data(), _freq_fft_n / 2 + 1);
       }

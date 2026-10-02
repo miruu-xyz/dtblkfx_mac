@@ -351,8 +351,8 @@ DtBlkFxEditor::DtBlkFxEditor(DtBlkFxAudioProcessor& p)
     : AudioProcessorEditor(&p)
     , audioProcessor(p)
     , header(p, lockHover)
-    , inputSpectrogram("Input Left")
-    , outputSpectrogram("Output Left")
+    , inputSpectrogram("Input")
+    , outputSpectrogram("Output")
     , footer(*this)
     , limiter(p)
 {
@@ -371,8 +371,10 @@ DtBlkFxEditor::DtBlkFxEditor(DtBlkFxAudioProcessor& p)
   // has no panel for it -- see docs/PHASE6.md, 6.2.
 
   // Channel Selectors Removed
-  inputSpectrogram.setLabel("Input L+R");
-  outputSpectrogram.setLabel("Output L+R");
+  // The engine feeds both from the left channel only, so they do not claim
+  // "L+R" as the design does.
+  inputSpectrogram.setLinked(&outputSpectrogram);
+  outputSpectrogram.setLinked(&inputSpectrogram);
 
   for (int i = 0; i < 8; ++i) {
     auto row = std::make_unique<design::FxRow>(p, i, lockHover);
@@ -394,19 +396,34 @@ DtBlkFxEditor::~DtBlkFxEditor()
 
 void DtBlkFxEditor::timerCallback()
 {
+  const double rate = audioProcessor.getSampleRate();
+
   if (audioProcessor.newInputSpectrogramDataAvailable) {
     juce::ScopedLock lock(audioProcessor.inputSpectrogramLock);
-    inputSpectrogram.processPendingData(audioProcessor.inputSpectrogramData.data(),
-                                        (int)audioProcessor.inputSpectrogramData.size());
+    inputSpectrogram.pushBlock(audioProcessor.inputSpectrogramData.data(),
+                               (int)audioProcessor.inputSpectrogramData.size(),
+                               rate);
     audioProcessor.newInputSpectrogramDataAvailable = false;
   }
 
   if (audioProcessor.newOutputSpectrogramDataAvailable) {
     juce::ScopedLock lock(audioProcessor.outputSpectrogramLock);
-    outputSpectrogram.processPendingData(audioProcessor.outputSpectrogramData.data(),
-                                         (int)audioProcessor.outputSpectrogramData.size());
+    outputSpectrogram.pushBlock(audioProcessor.outputSpectrogramData.data(),
+                                (int)audioProcessor.outputSpectrogramData.size(),
+                                rate);
     audioProcessor.newOutputSpectrogramDataAvailable = false;
   }
+
+  // The row whose range is being dragged, if any, shows that range inverted on
+  // both spectrograms. Polled at the timer's 60Hz, which is quick enough to
+  // follow a drag.
+  float a = 0.0f, b = 0.0f;
+  bool any = false;
+  for (auto& row : paramRows)
+    if ((any = row->rangeHighlight(a, b)))
+      break;
+  inputSpectrogram.setHighlight(any, a, b);
+  outputSpectrogram.setHighlight(any, a, b);
 
   updateInterpolation();
 

@@ -549,6 +549,24 @@ void FxRow::setFreqsLinked(bool on)
   freqB.setLinked(on);
 }
 
+bool FxRow::rangeHighlight(float& a, float& b) const
+{
+  // Evaluated live rather than tracked through events: during a press JUCE
+  // keeps the pressed component as the one "under" the mouse, and the button
+  // state is already up to date when the editor polls.
+  auto mouse = Desktop::getInstance().getMainMouseSource();
+  auto* pressed = mouse.isDragging() ? mouse.getComponentUnderMouse() : nullptr;
+  const bool pressing = pressed != nullptr && (pressed == &freqA || pressed == &freqB ||
+                                               pressed == &link || pressed == &handles);
+
+  if (!pressing || !shown.usesA || !shown.usesB)
+    return false;
+
+  a = shown.a;
+  b = shown.b;
+  return true;
+}
+
 FxRun1_0* FxRow::effect() const
 {
   return parkedEffect(processor, set);

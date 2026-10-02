@@ -185,6 +185,12 @@ public:
   /** Both frequency readouts show their hover box -- for the `↔` grip. */
   void setFreqsLinked(bool on);
 
+  /** True while the mouse is down on one of this row's range controls -- a
+      frequency readout, the grip or a handle -- and the effect uses both
+      frequencies. The spectrograms invert that range then, as the original's
+      FxCtrl::doHiliteSgrams did. Hovering alone does not: it only dims. */
+  bool rangeHighlight(float& a, float& b) const;
+
   /** The effect parked in the row -- what its parameter says, not what the
       engine is running, which is "Off" while the row is bypassed. */
   FxRun1_0* effect() const;

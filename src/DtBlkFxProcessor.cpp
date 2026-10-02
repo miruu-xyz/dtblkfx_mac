@@ -797,24 +797,37 @@ void DtBlkFxAudioProcessor::setStateInformation(const void* data, int sizeInByte
       apvts.replaceState(juce::ValueTree::fromXml(*xmlState));
 }
 
+void DtBlkFxAudioProcessor::pushSpectrogramBlock(std::vector<float>& held,
+                                                 std::atomic<bool>& available,
+                                                 const float* data,
+                                                 int numBins)
+{
+  // Max-hold every block since the editor last took one. The engine produces
+  // far more blocks than the editor's 60Hz poll can show; keeping only the
+  // latest, as this used to, threw the rest away and with them any transient
+  // that fell between two polls. The original kept the max across blocks too
+  // (Spectrogram::getMaxVals). A new FFT length starts over: its bins are not
+  // the old ones.
+  if (!available || (int)held.size() != numBins) {
+    held.assign(data, data + numBins);
+  }
+  else {
+    for (int i = 0; i < numBins; ++i)
+      held[(size_t)i] = std::max(held[(size_t)i], data[i]);
+  }
+  available = true;
+}
+
 void DtBlkFxAudioProcessor::pushInputSpectrogramData(const float* data, int numBins)
 {
   juce::ScopedLock lock(inputSpectrogramLock);
-  if (inputSpectrogramData.size() != numBins)
-    inputSpectrogramData.resize(numBins);
-
-  std::memcpy(inputSpectrogramData.data(), data, numBins * sizeof(float));
-  newInputSpectrogramDataAvailable = true;
+  pushSpectrogramBlock(inputSpectrogramData, newInputSpectrogramDataAvailable, data, numBins);
 }
 
 void DtBlkFxAudioProcessor::pushOutputSpectrogramData(const float* data, int numBins)
 {
   juce::ScopedLock lock(outputSpectrogramLock);
-  if (outputSpectrogramData.size() != numBins)
-    outputSpectrogramData.resize(numBins);
-
-  std::memcpy(outputSpectrogramData.data(), data, numBins * sizeof(float));
-  newOutputSpectrogramDataAvailable = true;
+  pushSpectrogramBlock(outputSpectrogramData, newOutputSpectrogramDataAvailable, data, numBins);
 }
 
 //==============================================================================
