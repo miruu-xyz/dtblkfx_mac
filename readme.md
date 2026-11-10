@@ -1,5 +1,4 @@
-# DtBlkFx (macOS Universal Edition)<img width="1280" height="720" alt="dtblk" src="https://github.com/user-attachments/assets/a1c9232e-b093-4b48-aa10-92aa534abed4" />
-
+# DtBlkFx (macOS Universal Edition)
 
 **DtBlkFx** is a Fast Fourier Transform (FFT) based VST plug-in for macOS, originally created by Darrell Tam and updated for modern macOS (Universal Binary) and JUCE by haiori.
 
@@ -8,6 +7,11 @@ It works by processing audio in the frequency domain, allowing for unique effect
 - **Harmonic Filtering**
 - **Frequency Shifting**
 - **Spectral Smearing**
+
+> [!NOTE]
+>
+> | [![AI:X EXECUTE](https://img.shields.io/badge/AI-EXECUTE-grey?style=flat&logoSize=auto&labelColor=13171f)](https://0rwx.com) | This forks macOS port and UX improvements (WIP) have been vibecoded based on the existing work on dtblkfx (see [Credits](#credits)). <br>I've guided the AI to the best of my knowledge but I cannot read or write C++ |
+> | --- | --- |
 
 ## Features
 - **Universal Support**: Native compatibility for both Apple Silicon (M1/M2/M3) and Intel processors.
@@ -29,13 +33,8 @@ minor changes due to JUCE upgrades are to be expected.
 ## About this fork
 
 This fork continues [haiori's macOS port](https://github.com/hai0ri/dtblkfx_mac).
-**But as a heads-up: The changes to the original repo are vibe coded (written and
-reviewed with Claude rather than by hand line-by-line).** I'm not a professional 
-software developer but a huge fan of the original plugin so I will do my best to 
-honor the work that has been done before me.
-An audio regression harness that gates every change touching the engine (below),
-and a written plan (`docs/ROADMAP.md`) scoping each change before it lands are set
-to make sure the quality of the code is as good as I can make it.
+I'm not a professional software developer but a huge fan of the original plugin 
+so I wanted to get a modern macOS version of it asap.
 
 Some notes if you wanna build it yourself:
 
